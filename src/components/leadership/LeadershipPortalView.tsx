@@ -58,8 +58,12 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
     user,
     isSystemAdmin,
     isStakeLeader,
+    hasStakeWideReadAccess,
     canManageActivities,
-    assignedUnitIds
+    canManageMembers,
+    canRecordManualAttendance,
+    manageableUnitIds,
+    reportUnitFilter
   } = useAuth()
 
   // Sign In & Recovery State
@@ -134,7 +138,7 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
   const [reopenReason, setReopenReason] = useState('')
   const [reopenSessionId, setReopenSessionId] = useState('')
 
-  const unitFilter: string[] | null = isStakeLeader ? null : assignedUnitIds
+  const unitFilter: string[] | null = reportUnitFilter
 
   const loadCurrentSubpathData = async () => {
     if (!isAuthenticated) return
@@ -142,7 +146,7 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
     try {
       if (currentSubpath === 'dashboard') {
         const [sum, sList] = await Promise.all([
-          reportService.getStakeSummary(),
+          reportService.getStakeSummary(unitFilter),
           activityService.listSessions()
         ])
         setStakeSummary(sum)
@@ -157,8 +161,8 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
         ])
         setUnits(uList)
         setMembers(mList)
-        if (!isStakeLeader && assignedUnitIds.length === 1 && !newMemberUnitId) {
-          setNewMemberUnitId(assignedUnitIds[0])
+        if (!isStakeLeader && manageableUnitIds.length === 1 && !newMemberUnitId) {
+          setNewMemberUnitId(manageableUnitIds[0])
         }
       } else if (currentSubpath === 'activities') {
         const [uList, aList, sList] = await Promise.all([
@@ -172,7 +176,7 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
       } else if (currentSubpath === 'attendance') {
         const [sList, mList] = await Promise.all([
           activityService.listSessions(),
-          memberService.listMembers(unitFilter)
+          memberService.listMembers(isStakeLeader ? null : manageableUnitIds)
         ])
         const activeSessions = sList.filter(s => s.status === 'active')
         setSessions(activeSessions)
@@ -366,10 +370,10 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
     { id: 'settings', label: 'Settings', icon: Settings }
   ]
 
-  // Scoped units available when registering members
+  // Scoped units available when registering members (strictly manageable units, excluding clerk-only assignments)
   const memberCreatableUnits = isStakeLeader
     ? units.filter(u => u.isActive)
-    : units.filter(u => u.isActive && assignedUnitIds.includes(u.id))
+    : units.filter(u => u.isActive && manageableUnitIds.includes(u.id))
 
   // Scoped members eligible for the currently selected manual check-in session
   const selectedManualSession = sessions.find(s => s.id === manualSessionId)
@@ -415,11 +419,15 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
 
   const handleCreateMember = async (e: React.FormEvent) => {
     e.preventDefault()
+    if (!canManageMembers) {
+      setStatusMsg({ type: 'error', text: 'Unauthorized: Clerk accounts have read-only access and cannot modify member census.' })
+      return
+    }
     if (!newMemberName.trim() || !newMemberUnitId) {
       setStatusMsg({ type: 'error', text: 'Full name and home unit are required.' })
       return
     }
-    if (!isStakeLeader && !assignedUnitIds.includes(newMemberUnitId)) {
+    if (!isStakeLeader && !manageableUnitIds.includes(newMemberUnitId)) {
       setStatusMsg({ type: 'error', text: 'Unauthorized: You can only register members into your assigned ward or branch.' })
       return
     }
@@ -557,6 +565,10 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
 
   const handleManualCheckIn = async (e: React.FormEvent) => {
     e.preventDefault()
+    if (!canRecordManualAttendance) {
+      setStatusMsg({ type: 'error', text: 'Unauthorized: Clerk accounts are read-only and cannot record manual check-ins.' })
+      return
+    }
     if (!manualSessionId.trim() || !manualMemberId.trim()) {
       setStatusMsg({ type: 'error', text: 'Active session and member are required.' })
       return
@@ -591,7 +603,7 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
       return
     }
     try {
-      const history = await reportService.getIndividualHistory(memberId)
+      const history = await reportService.getIndividualHistory(memberId, unitFilter)
       setMemberHistory(history)
     } catch (err: any) {
       setStatusMsg({ type: 'error', text: err?.message || 'Failed to load individual member history' })
@@ -638,7 +650,7 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
             <span>Scoped User:</span>
             <span className="font-semibold text-slate-200">{user?.fullName || 'Stake Leader'}</span>
             <span className="text-[11px] px-2 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-800">
-              {isStakeLeader
+              {hasStakeWideReadAccess
                 ? 'Stake Wide'
                 : (user?.unitAssignments || []).map(ua => ua.unitName).filter(Boolean).join(', ') || 'Unit Assigned'}
             </span>
@@ -1120,161 +1132,177 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
         {/* 4. AUTHORIZED ATTENDANCE CHECK-IN VIEW */}
         {currentSubpath === 'attendance' && (
           <div className="max-w-xl mx-auto py-4">
-            <div className="bg-slate-950 border border-slate-800 rounded-2xl p-6">
-              <div className="flex items-center space-x-3 mb-4">
-                <div className="p-2.5 bg-emerald-950/80 border border-emerald-500/30 text-emerald-400 rounded-xl">
-                  <UserCheck className="w-5 h-5" />
-                </div>
-                <div>
-                  <h3 className="text-base font-bold text-white">Authorized Leader Check-In</h3>
-                  <p className="text-xs text-slate-400">
-                    Directly check in an active member within your unit authority. Audited with caller credentials.
-                  </p>
-                </div>
+            {!canRecordManualAttendance ? (
+              <div className="p-8 bg-slate-950 border border-slate-800 rounded-2xl text-center text-slate-400">
+                <Shield className="w-8 h-8 mx-auto mb-2 text-slate-600" />
+                <p className="text-sm font-semibold text-white mb-1">Read-Only Clerk Scope</p>
+                <p className="text-xs">
+                  Authorized manual attendance check-in is restricted to Stake Presidency, System Administrators, Bishops, Branch Presidents, and YSA Leaders. Clerks have read-only access to attendance and reports.
+                </p>
               </div>
+            ) : (
+              <div className="bg-slate-950 border border-slate-800 rounded-2xl p-6">
+                <div className="flex items-center space-x-3 mb-4">
+                  <div className="p-2.5 bg-emerald-950/80 border border-emerald-500/30 text-emerald-400 rounded-xl">
+                    <UserCheck className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-bold text-white">Authorized Leader Check-In</h3>
+                    <p className="text-xs text-slate-400">
+                      Directly check in an active member within your unit authority. Audited with caller credentials.
+                    </p>
+                  </div>
+                </div>
 
-              <form onSubmit={handleManualCheckIn} className="space-y-4">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-300 uppercase mb-1">Active Session</label>
-                  <select
-                    value={manualSessionId}
-                    onChange={(e) => {
-                      setManualSessionId(e.target.value)
-                      setManualMemberId('')
-                    }}
-                    className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-xl text-xs text-white"
+                <form onSubmit={handleManualCheckIn} className="space-y-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-300 uppercase mb-1">Active Session</label>
+                    <select
+                      value={manualSessionId}
+                      onChange={(e) => {
+                        setManualSessionId(e.target.value)
+                        setManualMemberId('')
+                      }}
+                      className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-xl text-xs text-white"
+                    >
+                      <option value="">Select Active Session</option>
+                      {sessions.map(s => <option key={s.id} value={s.id}>{s.sessionTitle} ({s.sessionDate})</option>)}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-300 uppercase mb-1">
+                      Select Active Member ({eligibleManualMembers.length} in scope)
+                    </label>
+                    <select
+                      value={manualMemberId}
+                      onChange={(e) => setManualMemberId(e.target.value)}
+                      className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-xl text-xs text-white"
+                    >
+                      <option value="">Select Member</option>
+                      {eligibleManualMembers.map(m => (
+                        <option key={m.id} value={m.id}>
+                          {m.fullName} ({m.homeUnitName || 'Unit'})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-300 uppercase mb-1">Leader Notes (Optional)</label>
+                    <input
+                      type="text"
+                      value={manualNotes}
+                      onChange={(e) => setManualNotes(e.target.value)}
+                      placeholder="e.g. In-person verification"
+                      className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-xl text-xs text-white"
+                    />
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={isSubmittingManual}
+                    className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold rounded-xl text-xs transition disabled:opacity-50"
                   >
-                    <option value="">Select Active Session</option>
-                    {sessions.map(s => <option key={s.id} value={s.id}>{s.sessionTitle} ({s.sessionDate})</option>)}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-slate-300 uppercase mb-1">
-                    Select Active Member ({eligibleManualMembers.length} in scope)
-                  </label>
-                  <select
-                    value={manualMemberId}
-                    onChange={(e) => setManualMemberId(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-xl text-xs text-white"
-                  >
-                    <option value="">Select Member</option>
-                    {eligibleManualMembers.map(m => (
-                      <option key={m.id} value={m.id}>
-                        {m.fullName} ({m.homeUnitName || 'Unit'})
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-slate-300 uppercase mb-1">Leader Notes (Optional)</label>
-                  <input
-                    type="text"
-                    value={manualNotes}
-                    onChange={(e) => setManualNotes(e.target.value)}
-                    placeholder="e.g. In-person verification"
-                    className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-xl text-xs text-white"
-                  />
-                </div>
-
-                <button
-                  type="submit"
-                  disabled={isSubmittingManual}
-                  className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold rounded-xl text-xs transition disabled:opacity-50"
-                >
-                  {isSubmittingManual ? 'Checking in...' : 'Record Check-In'}
-                </button>
-              </form>
-            </div>
+                    {isSubmittingManual ? 'Checking in...' : 'Record Check-In'}
+                  </button>
+                </form>
+              </div>
+            )}
           </div>
         )}
 
         {/* 5. MEMBER CENSUS VIEW */}
         {currentSubpath === 'members' && (
           <div className="space-y-6">
-            <form onSubmit={handleCreateMember} className="bg-slate-950 border border-slate-800 p-4 rounded-xl space-y-3">
-              <h3 className="text-xs font-bold text-white uppercase tracking-wider">Register New Member in Census</h3>
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-                <div>
-                  <label className="block text-[11px] text-slate-300 uppercase mb-1">Full Name *</label>
-                  <input
-                    type="text"
-                    value={newMemberName}
-                    onChange={(e) => setNewMemberName(e.target.value)}
-                    placeholder="e.g. Oluwatosin Adeyemi"
-                    className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-lg text-xs text-white"
-                  />
+            {canManageMembers ? (
+              <form onSubmit={handleCreateMember} className="bg-slate-950 border border-slate-800 p-4 rounded-xl space-y-3">
+                <h3 className="text-xs font-bold text-white uppercase tracking-wider">Register New Member in Census</h3>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                  <div>
+                    <label className="block text-[11px] text-slate-300 uppercase mb-1">Full Name *</label>
+                    <input
+                      type="text"
+                      value={newMemberName}
+                      onChange={(e) => setNewMemberName(e.target.value)}
+                      placeholder="e.g. Oluwatosin Adeyemi"
+                      className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-lg text-xs text-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] text-slate-300 uppercase mb-1">Preferred Name</label>
+                    <input
+                      type="text"
+                      value={newMemberPrefName}
+                      onChange={(e) => setNewMemberPrefName(e.target.value)}
+                      placeholder="e.g. Tosin"
+                      className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-lg text-xs text-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] text-slate-300 uppercase mb-1">Home Ward / Branch *</label>
+                    <select
+                      value={newMemberUnitId}
+                      onChange={(e) => setNewMemberUnitId(e.target.value)}
+                      className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-lg text-xs text-white"
+                    >
+                      <option value="">Select Unit</option>
+                      {memberCreatableUnits.map(u => <option key={u.id} value={u.id}>{u.unitName}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-[11px] text-slate-300 uppercase mb-1">Gender</label>
+                    <select
+                      value={newMemberGender}
+                      onChange={(e) => setNewMemberGender(e.target.value as any)}
+                      className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-lg text-xs text-white"
+                    >
+                      <option value="male">Male</option>
+                      <option value="female">Female</option>
+                    </select>
+                  </div>
                 </div>
-                <div>
-                  <label className="block text-[11px] text-slate-300 uppercase mb-1">Preferred Name</label>
-                  <input
-                    type="text"
-                    value={newMemberPrefName}
-                    onChange={(e) => setNewMemberPrefName(e.target.value)}
-                    placeholder="e.g. Tosin"
-                    className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-lg text-xs text-white"
-                  />
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div>
+                    <label className="block text-[11px] text-slate-300 uppercase mb-1">Phone</label>
+                    <input
+                      type="tel"
+                      value={newMemberPhone}
+                      onChange={(e) => setNewMemberPhone(e.target.value)}
+                      placeholder="080 1234 5678"
+                      className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-lg text-xs text-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] text-slate-300 uppercase mb-1">Email</label>
+                    <input
+                      type="email"
+                      value={newMemberEmail}
+                      onChange={(e) => setNewMemberEmail(e.target.value)}
+                      placeholder="member@example.com"
+                      className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-lg text-xs text-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] text-slate-300 uppercase mb-1">Member Number (Optional)</label>
+                    <input
+                      type="text"
+                      value={newMemberNumber}
+                      onChange={(e) => setNewMemberNumber(e.target.value)}
+                      placeholder="Record number"
+                      className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-lg text-xs text-white"
+                    />
+                  </div>
                 </div>
-                <div>
-                  <label className="block text-[11px] text-slate-300 uppercase mb-1">Home Ward / Branch *</label>
-                  <select
-                    value={newMemberUnitId}
-                    onChange={(e) => setNewMemberUnitId(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-lg text-xs text-white"
-                  >
-                    <option value="">Select Unit</option>
-                    {memberCreatableUnits.map(u => <option key={u.id} value={u.id}>{u.unitName}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-[11px] text-slate-300 uppercase mb-1">Gender</label>
-                  <select
-                    value={newMemberGender}
-                    onChange={(e) => setNewMemberGender(e.target.value as any)}
-                    className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-lg text-xs text-white"
-                  >
-                    <option value="male">Male</option>
-                    <option value="female">Female</option>
-                  </select>
-                </div>
+                <button type="submit" className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold">
+                  Register Member
+                </button>
+              </form>
+            ) : (
+              <div className="p-3.5 bg-slate-950 border border-slate-800 rounded-xl text-xs text-slate-400">
+                Read-only member census view for your assigned scope. Registering or archiving members requires Stake Presidency, System Admin, Bishop, Branch President, or assigned YSA Leader authority.
               </div>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div>
-                  <label className="block text-[11px] text-slate-300 uppercase mb-1">Phone</label>
-                  <input
-                    type="tel"
-                    value={newMemberPhone}
-                    onChange={(e) => setNewMemberPhone(e.target.value)}
-                    placeholder="080 1234 5678"
-                    className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-lg text-xs text-white"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[11px] text-slate-300 uppercase mb-1">Email</label>
-                  <input
-                    type="email"
-                    value={newMemberEmail}
-                    onChange={(e) => setNewMemberEmail(e.target.value)}
-                    placeholder="member@example.com"
-                    className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-lg text-xs text-white"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[11px] text-slate-300 uppercase mb-1">Member Number (Optional)</label>
-                  <input
-                    type="text"
-                    value={newMemberNumber}
-                    onChange={(e) => setNewMemberNumber(e.target.value)}
-                    placeholder="Record number"
-                    className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-lg text-xs text-white"
-                  />
-                </div>
-              </div>
-              <button type="submit" className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold">
-                Register Member
-              </button>
-            </form>
+            )}
 
             <div className="bg-slate-950 border border-slate-800 rounded-xl overflow-hidden">
               <table className="w-full text-xs text-left text-slate-300">
@@ -1284,7 +1312,7 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
                     <th className="px-4 py-3">Unit</th>
                     <th className="px-4 py-3">Phone</th>
                     <th className="px-4 py-3">Status</th>
-                    <th className="px-4 py-3 text-right">Action</th>
+                    {canManageMembers && <th className="px-4 py-3 text-right">Action</th>}
                   </tr>
                 </thead>
                 <tbody>
@@ -1298,26 +1326,28 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
                           {m.isActive ? 'Active' : 'Archived'}
                         </span>
                       </td>
-                      <td className="px-4 py-3 text-right">
-                        <button
-                          onClick={async () => {
-                            try {
-                              await memberService.toggleMemberStatus(m.id, !m.isActive)
-                              await loadCurrentSubpathData()
-                            } catch (err: any) {
-                              setStatusMsg({ type: 'error', text: err?.message || 'Failed to update member status' })
-                            }
-                          }}
-                          className="text-[11px] text-slate-400 hover:text-white"
-                        >
-                          {m.isActive ? 'Archive' : 'Restore'}
-                        </button>
-                      </td>
+                      {canManageMembers && (
+                        <td className="px-4 py-3 text-right">
+                          <button
+                            onClick={async () => {
+                              try {
+                                await memberService.toggleMemberStatus(m.id, !m.isActive)
+                                await loadCurrentSubpathData()
+                              } catch (err: any) {
+                                setStatusMsg({ type: 'error', text: err?.message || 'Failed to update member status' })
+                              }
+                            }}
+                            className="text-[11px] text-slate-400 hover:text-white"
+                          >
+                            {m.isActive ? 'Archive' : 'Restore'}
+                          </button>
+                        </td>
+                      )}
                     </tr>
                   ))}
                   {members.length === 0 && (
                     <tr>
-                      <td colSpan={5} className="px-4 py-6 text-center text-slate-500">No members registered in census yet.</td>
+                      <td colSpan={canManageMembers ? 5 : 4} className="px-4 py-6 text-center text-slate-500">No members registered in census yet.</td>
                     </tr>
                   )}
                 </tbody>
@@ -1563,9 +1593,14 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
                     onSubmit={async (e) => {
                       e.preventDefault()
                       if (!assignUserId) return
+                      const unitRequiredRoles: AppRole[] = ['bishop', 'branch_president', 'ysa_leader', 'ward_clerk', 'branch_clerk']
+                      if (unitRequiredRoles.includes(assignRole) && !assignUnitId) {
+                        setStatusMsg({ type: 'error', text: `Selecting a target ward or branch is required when assigning "${assignRole}".` })
+                        return
+                      }
                       try {
                         await adminService.assignUserRole(assignUserId, assignRole)
-                        if (assignUnitId && ['bishop', 'branch_president', 'ysa_leader'].includes(assignRole)) {
+                        if (assignUnitId && unitRequiredRoles.includes(assignRole)) {
                           await adminService.assignUserUnit(assignUserId, assignUnitId, assignRole as any)
                         }
                         await loadCurrentSubpathData()
@@ -1597,6 +1632,9 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
                         <option value="ysa_leader">YSA Leader</option>
                         <option value="bishop">Bishop</option>
                         <option value="branch_president">Branch President</option>
+                        <option value="ward_clerk">Ward Clerk</option>
+                        <option value="branch_clerk">Branch Clerk</option>
+                        <option value="stake_clerk">Stake Clerk</option>
                         <option value="stake_presidency">Stake Presidency</option>
                         <option value="system_admin">System Admin</option>
                       </select>

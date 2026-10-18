@@ -9,6 +9,16 @@ export type AppRole =
   | 'stake_presidency'
   | 'bishop'
   | 'branch_president'
+  | 'stake_clerk'
+  | 'ward_clerk'
+  | 'branch_clerk'
+
+export type UnitAssignedRole =
+  | 'bishop'
+  | 'branch_president'
+  | 'ysa_leader'
+  | 'ward_clerk'
+  | 'branch_clerk'
 
 export type UnitType = 'ward' | 'branch'
 
@@ -25,7 +35,7 @@ export interface UserUnitAssignment {
   id: string
   userId: string
   unitId: string
-  assignedRole: 'bishop' | 'branch_president' | 'ysa_leader'
+  assignedRole: UnitAssignedRole
   assignedBy?: string | null
   createdAt: string
   unitName?: string

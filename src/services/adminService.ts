@@ -1,12 +1,12 @@
 import { supabase } from '../lib/supabase'
-import { StakeUnit, UserProfile, AppRole, UserUnitAssignment } from '../types/database'
+import { StakeUnit, UserProfile, AppRole, UserUnitAssignment, UnitAssignedRole } from '../types/database'
 
 export interface ProvisionUserParams {
   userId: string
   fullName: string
   email: string
   roles: AppRole[]
-  unitAssignments?: { unitId: string; role: 'bishop' | 'branch_president' | 'ysa_leader' }[]
+  unitAssignments?: { unitId: string; role: UnitAssignedRole }[]
 }
 
 export const adminService = {
@@ -122,7 +122,7 @@ export const adminService = {
   async assignUserUnit(
     userId: string,
     unitId: string,
-    assignedRole: 'bishop' | 'branch_president' | 'ysa_leader'
+    assignedRole: UnitAssignedRole
   ): Promise<void> {
     const { error } = await supabase
       .from('user_unit_assignments')

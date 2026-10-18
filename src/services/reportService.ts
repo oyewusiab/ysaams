@@ -42,7 +42,7 @@ export const reportService = {
   calculateAttendancePercentage,
   getMonthDateRange,
 
-  async getStakeSummary(): Promise<{
+  async getStakeSummary(unitIdFilter?: string | string[] | null): Promise<{
     totalUnits: number
     totalMembers: number
     totalActivities: number
@@ -50,12 +50,41 @@ export const reportService = {
     totalCheckIns: number
     activeSessionsCount: number
   }> {
+    let unitsQuery = supabase.from('stake_units').select('id', { count: 'exact', head: true }).eq('is_active', true)
+    let membersQuery = supabase.from('members').select('id', { count: 'exact', head: true }).eq('is_active', true)
+    let attQuery = supabase.from('attendance_records').select('id', { count: 'exact', head: true })
+
+    if (Array.isArray(unitIdFilter)) {
+      if (unitIdFilter.length === 0) {
+        const [actRes, sessRes] = await Promise.all([
+          supabase.from('activities').select('id', { count: 'exact', head: true }),
+          supabase.from('activity_sessions').select('id, status')
+        ])
+        const sessions = sessRes.data || []
+        return {
+          totalUnits: 0,
+          totalMembers: 0,
+          totalActivities: actRes.count || 0,
+          totalSessions: sessions.length,
+          totalCheckIns: 0,
+          activeSessionsCount: sessions.filter((s: any) => s.status === 'active').length
+        }
+      }
+      unitsQuery = unitsQuery.in('id', unitIdFilter)
+      membersQuery = membersQuery.in('home_unit_id', unitIdFilter)
+      attQuery = attQuery.in('recorded_unit_id', unitIdFilter)
+    } else if (unitIdFilter) {
+      unitsQuery = unitsQuery.eq('id', unitIdFilter)
+      membersQuery = membersQuery.eq('home_unit_id', unitIdFilter)
+      attQuery = attQuery.eq('recorded_unit_id', unitIdFilter)
+    }
+
     const [unitsRes, membersRes, actRes, sessRes, attRes] = await Promise.all([
-      supabase.from('stake_units').select('id', { count: 'exact', head: true }).eq('is_active', true),
-      supabase.from('members').select('id', { count: 'exact', head: true }).eq('is_active', true),
+      unitsQuery,
+      membersQuery,
       supabase.from('activities').select('id', { count: 'exact', head: true }),
       supabase.from('activity_sessions').select('id, status'),
-      supabase.from('attendance_records').select('id', { count: 'exact', head: true })
+      attQuery
     ])
 
     const sessions = sessRes.data || []
@@ -90,6 +119,8 @@ export const reportService = {
     const { data: units } = await unitQuery
     if (!units || units.length === 0) return []
 
+    const scopedUnitIds = units.map((u: any) => u.id)
+
     // 2. Fetch sessions in that month using valid calendar end date
     const { startDate, endDate } = getMonthDateRange(year, month)
 
@@ -101,7 +132,7 @@ export const reportService = {
 
     const sessionList = sessions || []
 
-    // 3. Fetch attendance records in those sessions
+    // 3. Fetch attendance records in those sessions strictly within scoped units
     const sessionIds = sessionList.map((s: any) => s.id)
     let records: any[] = []
     if (sessionIds.length > 0) {
@@ -109,14 +140,16 @@ export const reportService = {
         .from('attendance_records')
         .select('session_id, recorded_unit_id')
         .in('session_id', sessionIds)
+        .in('recorded_unit_id', scopedUnitIds)
       records = recs || []
     }
 
-    // 4. Fetch member counts per unit
+    // 4. Fetch member counts per unit strictly within scoped units
     const { data: members } = await supabase
       .from('members')
       .select('home_unit_id')
       .eq('is_active', true)
+      .in('home_unit_id', scopedUnitIds)
 
     const memberMap: Record<string, number> = {}
     ;(members || []).forEach((m: any) => {
@@ -145,14 +178,36 @@ export const reportService = {
     })
   },
 
-  async getIndividualHistory(memberId: string): Promise<IndividualAttendanceHistory | null> {
-    const { data: member } = await supabase
+  async getIndividualHistory(
+    memberId: string,
+    unitIdFilter?: string | string[] | null
+  ): Promise<IndividualAttendanceHistory | null> {
+    if (Array.isArray(unitIdFilter) && unitIdFilter.length === 0) {
+      return null
+    }
+
+    let memberQuery = supabase
       .from('members')
-      .select('id, full_name, stake_units(unit_name)')
+      .select('id, full_name, home_unit_id, stake_units(unit_name)')
       .eq('id', memberId)
-      .single()
+
+    if (Array.isArray(unitIdFilter)) {
+      memberQuery = memberQuery.in('home_unit_id', unitIdFilter)
+    } else if (unitIdFilter) {
+      memberQuery = memberQuery.eq('home_unit_id', unitIdFilter)
+    }
+
+    const { data: member } = await memberQuery.maybeSingle()
 
     if (!member) return null
+
+    // Defense-in-depth verify unit scope even if caller passed an arbitrary memberId
+    if (Array.isArray(unitIdFilter) && !unitIdFilter.includes((member as any).home_unit_id)) {
+      return null
+    }
+    if (typeof unitIdFilter === 'string' && (member as any).home_unit_id !== unitIdFilter) {
+      return null
+    }
 
     const { data: records } = await supabase
       .from('attendance_records')

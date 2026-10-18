@@ -1,17 +1,94 @@
 import React, { createContext, useContext, useState, useEffect } from 'react'
-import { UserProfile, AppRole } from '../types/database'
+import { UserProfile, AppRole, UserUnitAssignment } from '../types/database'
 import { authService, validateAuthorizedProfile } from '../services/authService'
 import { supabase } from '../lib/supabase'
 
-interface AuthContextType {
+export interface DerivedLeadershipAccess {
+  isSystemAdmin: boolean
+  isStakeLeader: boolean
+  isStakeClerk: boolean
+  hasStakeWideReadAccess: boolean
+  isClerkRoleOnly: boolean
+  canManageActivities: boolean
+  canManageMembers: boolean
+  canRecordManualAttendance: boolean
+  assignedUnitIds: string[]
+  manageableUnitIds: string[]
+  reportUnitFilter: string[] | null
+}
+
+/**
+ * Pure helper to derive least-privilege permissions and unit scoping for any authenticated profile.
+ * Exported for unit testing across all leadership and clerk roles.
+ */
+export function deriveLeadershipAccess(
+  roles: AppRole[],
+  unitAssignments: UserUnitAssignment[] = []
+): DerivedLeadershipAccess {
+  const isSystemAdmin = roles.includes('system_admin')
+  // Strictly system_admin or stake_presidency (governs session reopening, user directory, and audit logs)
+  const isStakeLeader = isSystemAdmin || roles.includes('stake_presidency')
+  const isStakeClerk = roles.includes('stake_clerk')
+  // Stake-wide read/reporting access (includes stake_clerk, or a ysa_leader assigned to all units via assignedUnitIds)
+  const hasStakeWideReadAccess = isStakeLeader || isStakeClerk
+
+  const canManageActivities = isStakeLeader || roles.includes('ysa_leader')
+
+  // Only count unit assignments where the user also holds the matching role in user_roles
+  const validAssignments = unitAssignments.filter(
+    (ua) => ua.unitId && roles.includes(ua.assignedRole)
+  )
+
+  const assignedUnitIds = Array.from(new Set(validAssignments.map((ua) => ua.unitId)))
+
+  const manageableUnitIds = Array.from(
+    new Set(
+      validAssignments
+        .filter((ua) =>
+          ['bishop', 'branch_president', 'ysa_leader'].includes(ua.assignedRole)
+        )
+        .map((ua) => ua.unitId)
+    )
+  )
+
+  const canManageMembers = isStakeLeader || manageableUnitIds.length > 0
+  const canRecordManualAttendance = isStakeLeader || manageableUnitIds.length > 0
+
+  const nonClerkRoles: AppRole[] = [
+    'system_admin',
+    'stake_presidency',
+    'ysa_leader',
+    'bishop',
+    'branch_president'
+  ]
+  const hasNonClerkRole = roles.some((r) => nonClerkRoles.includes(r))
+  const hasClerkRole = roles.some((r) =>
+    ['stake_clerk', 'ward_clerk', 'branch_clerk'].includes(r)
+  )
+  const isClerkRoleOnly = hasClerkRole && !hasNonClerkRole
+
+  const reportUnitFilter: string[] | null = hasStakeWideReadAccess ? null : assignedUnitIds
+
+  return {
+    isSystemAdmin,
+    isStakeLeader,
+    isStakeClerk,
+    hasStakeWideReadAccess,
+    isClerkRoleOnly,
+    canManageActivities,
+    canManageMembers,
+    canRecordManualAttendance,
+    assignedUnitIds,
+    manageableUnitIds,
+    reportUnitFilter
+  }
+}
+
+interface AuthContextType extends DerivedLeadershipAccess {
   user: UserProfile | null
   roles: AppRole[]
   isAuthenticated: boolean
   isLoading: boolean
-  isSystemAdmin: boolean
-  isStakeLeader: boolean
-  canManageActivities: boolean
-  assignedUnitIds: string[]
   hasRole: (role: AppRole) => boolean
   signOut: () => Promise<void>
 }
@@ -87,12 +164,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return roles.includes(role)
   }
 
-  const isSystemAdmin = roles.includes('system_admin')
-  const isStakeLeader = isSystemAdmin || roles.includes('stake_presidency')
-  const canManageActivities = isStakeLeader || roles.includes('ysa_leader')
-  const assignedUnitIds = Array.from(
-    new Set((user?.unitAssignments || []).map((ua) => ua.unitId).filter(Boolean))
-  )
+  const access = deriveLeadershipAccess(roles, user?.unitAssignments || [])
 
   const signOut = async () => {
     await authService.signOut()
@@ -107,10 +179,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         roles,
         isAuthenticated: !!user && user.accountStatus === 'active' && roles.length > 0,
         isLoading,
-        isSystemAdmin,
-        isStakeLeader,
-        canManageActivities,
-        assignedUnitIds,
+        ...access,
         hasRole,
         signOut
       }}
@@ -127,4 +196,5 @@ export const useAuth = (): AuthContextType => {
   }
   return context
 }
+
 

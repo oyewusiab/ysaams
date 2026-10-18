@@ -5,7 +5,7 @@ import path from 'path'
 describe('Migration Static Contract & Verification Tests', () => {
   const migrationsDir = path.resolve(__dirname, '../../supabase/migrations')
 
-  it('contains all 6 sequentially versioned migration files for Phase 2', () => {
+  it('contains all sequentially versioned migration files (Migrations 1 through 8)', () => {
     const files = fs.readdirSync(migrationsDir).filter(f => f.endsWith('.sql'))
     expect(files).toContain('20261013000001_core_identity_and_units.sql')
     expect(files).toContain('20261013000002_core_rls_policies.sql')
@@ -13,6 +13,8 @@ describe('Migration Static Contract & Verification Tests', () => {
     expect(files).toContain('20261013000004_attendance_engine_rpcs.sql')
     expect(files).toContain('20261013000005_security_and_privilege_remediation.sql')
     expect(files).toContain('20261018000006_targeted_manual_attendance_authorization.sql')
+    expect(files).toContain('20261019000007_release_readiness_admin_and_kiosk_remediation.sql')
+    expect(files).toContain('20261019000008_clerk_roles_and_least_privilege_rls.sql')
   })
 
   it('verifies Migration 1 defines all core identity tables and immutability triggers', () => {
@@ -115,7 +117,7 @@ describe('Migration Static Contract & Verification Tests', () => {
     expect(content).toContain('GRANT EXECUTE ON FUNCTION public.record_manual_attendance(UUID, UUID, TEXT) TO authenticated')
   })
 
-  it('verifies Migration 7 restores admin table write grants under forced RLS, syncs auth.users profiles, and defines token-validated kiosk member lookup', () => {
+  it('verifies Migration 7 restores admin table write grants under forced RLS, syncs auth.users profiles, and hardens kiosk RPCs', () => {
     const content = fs.readFileSync(
       path.join(migrationsDir, '20261019000007_release_readiness_admin_and_kiosk_remediation.sql'),
       'utf-8'
@@ -126,8 +128,33 @@ describe('Migration Static Contract & Verification Tests', () => {
     expect(content).toContain('GRANT INSERT, DELETE ON TABLE public.user_unit_assignments TO authenticated')
     expect(content).toContain('fn_sync_auth_user_profile')
     expect(content).toContain('trg_on_auth_user_created')
+    expect(content).toContain('REVOKE EXECUTE ON FUNCTION public.fn_sync_auth_user_profile() FROM PUBLIC, anon, authenticated')
     expect(content).toContain('CREATE OR REPLACE FUNCTION public.search_terminal_members')
+    expect(content).toContain('REVOKE EXECUTE ON FUNCTION public.search_terminal_members(UUID, TEXT, UUID, TEXT) FROM PUBLIC')
+    expect(content).toContain('REVOKE EXECUTE ON FUNCTION public.record_attendance(UUID, UUID, TEXT) FROM PUBLIC')
+    expect(content).toContain('REVOKE EXECUTE ON FUNCTION public.record_visitor_attendance(UUID, TEXT, TEXT, BOOLEAN, UUID, TEXT) FROM PUBLIC')
     expect(content).toContain('v_session.visitor_registration_enabled IS NOT TRUE')
+    expect(content).toContain('IF NOT (p_inviting_unit_id = ANY(v_session.participating_units)) THEN')
+  })
+
+  it('verifies Migration 8 defines least-privilege clerk roles and read-only RLS enforcement', () => {
+    const content = fs.readFileSync(
+      path.join(migrationsDir, '20261019000008_clerk_roles_and_least_privilege_rls.sql'),
+      'utf-8'
+    )
+    expect(content).toContain("'stake_clerk'")
+    expect(content).toContain("'ward_clerk'")
+    expect(content).toContain("'branch_clerk'")
+    expect(content).toContain('CREATE OR REPLACE FUNCTION public.is_stake_clerk')
+    expect(content).toContain('REVOKE EXECUTE ON FUNCTION public.is_stake_clerk(UUID) FROM PUBLIC')
+    expect(content).toContain('CREATE OR REPLACE FUNCTION public.get_user_assigned_units')
+    expect(content).toContain('ON ur.user_id = uua.user_id')
+    expect(content).toContain('AND ur.role_name = uua.assigned_role')
+    expect(content).toContain('CREATE POLICY policy_members_view ON public.members')
+    expect(content).toContain('CREATE POLICY policy_members_manage ON public.members')
+    expect(content).toContain("AND uua.assigned_role IN ('bishop', 'branch_president', 'ysa_leader')")
+    expect(content).toContain('CREATE POLICY policy_attendance_view ON public.attendance_records')
+    expect(content).toContain('CREATE POLICY policy_visitors_view ON public.session_visitors')
   })
 })
 

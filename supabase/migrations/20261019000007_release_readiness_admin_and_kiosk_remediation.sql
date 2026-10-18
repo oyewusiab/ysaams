@@ -70,6 +70,8 @@ AFTER INSERT ON auth.users
 FOR EACH ROW
 EXECUTE FUNCTION public.fn_sync_auth_user_profile();
 
+REVOKE EXECUTE ON FUNCTION public.fn_sync_auth_user_profile() FROM PUBLIC, anon, authenticated;
+
 -- Backfill any existing auth.users identities that do not yet have a user_profiles row
 INSERT INTO public.user_profiles (id, full_name, email, account_status)
 SELECT
@@ -199,6 +201,11 @@ DECLARE
     v_attendance_id UUID;
 BEGIN
     v_now := timezone('utc'::text, now());
+
+    IF p_terminal_token IS NULL OR length(trim(p_terminal_token)) = 0 THEN
+        RAISE EXCEPTION 'Unauthorized: Terminal bearer token is required.';
+    END IF;
+
     v_token_hash := encode(sha256(convert_to(trim(p_terminal_token), 'UTF8')), 'hex');
 
     -- 1. Validate terminal token
@@ -283,6 +290,7 @@ BEGIN
 END;
 $$;
 
+REVOKE EXECUTE ON FUNCTION public.record_attendance(UUID, UUID, TEXT) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.record_attendance(UUID, UUID, TEXT) TO anon, authenticated;
 
 CREATE OR REPLACE FUNCTION public.record_visitor_attendance(
@@ -306,6 +314,11 @@ DECLARE
     v_visitor_id UUID;
 BEGIN
     v_now := timezone('utc'::text, now());
+
+    IF p_terminal_token IS NULL OR length(trim(p_terminal_token)) = 0 THEN
+        RAISE EXCEPTION 'Unauthorized: Terminal bearer token is required.';
+    END IF;
+
     v_token_hash := encode(sha256(convert_to(trim(p_terminal_token), 'UTF8')), 'hex');
 
     -- 1. Validate terminal token
@@ -337,10 +350,16 @@ BEGIN
         RAISE EXCEPTION 'Visitor full name is required (at least 2 characters).';
     END IF;
 
-    -- 3. Optional inviting unit validation
+    -- 3. Optional inviting unit validation (including participating_units scope)
     IF p_inviting_unit_id IS NOT NULL THEN
         IF NOT EXISTS (SELECT 1 FROM public.stake_units WHERE id = p_inviting_unit_id AND is_active = TRUE) THEN
             RAISE EXCEPTION 'Selected inviting unit is invalid or inactive.';
+        END IF;
+
+        IF v_session.participating_units IS NOT NULL AND array_length(v_session.participating_units, 1) > 0 THEN
+            IF NOT (p_inviting_unit_id = ANY(v_session.participating_units)) THEN
+                RAISE EXCEPTION 'Selected inviting unit is not authorized for this session (participating units restriction).';
+            END IF;
         END IF;
     END IF;
 
@@ -379,4 +398,6 @@ BEGIN
 END;
 $$;
 
+REVOKE EXECUTE ON FUNCTION public.record_visitor_attendance(UUID, TEXT, TEXT, BOOLEAN, UUID, TEXT) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.record_visitor_attendance(UUID, TEXT, TEXT, BOOLEAN, UUID, TEXT) TO anon, authenticated;
+

@@ -1,11 +1,12 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { AppRole } from '../types/database'
+import { AppRole, UnitAssignedRole, UserUnitAssignment as DbUserUnitAssignment } from '../types/database'
+import { deriveLeadershipAccess } from '../context/AuthContext'
 
 // --- Mock In-Memory Domain Engine for Pure Unit Testing ---
 
 interface UserUnitAssignment {
   unitId: string
-  assignedRole: 'bishop' | 'branch_president' | 'ysa_leader'
+  assignedRole: UnitAssignedRole
 }
 
 interface UserContext {
@@ -636,5 +637,176 @@ describe('Domain Rules & Invariant Validation (Pure Unit Tests)', () => {
       expect(concurrentRace.success).toBe(false)
       expect(concurrentRace.error).toContain('was concurrently marked present for this session')
     })
+
+    it('strictly denies stake_clerk, ward_clerk, and branch_clerk from manual attendance check-ins', () => {
+      const records: AttendanceEntry[] = []
+      const stakeClerk: UserContext = {
+        id: 'u-sc',
+        accountStatus: 'active',
+        roles: ['stake_clerk'],
+        unitAssignments: []
+      }
+      const wardClerk: UserContext = {
+        id: 'u-wc',
+        accountStatus: 'active',
+        roles: ['ward_clerk'],
+        unitAssignments: [{ unitId: 'ward-1', assignedRole: 'ward_clerk' }]
+      }
+      const branchClerk: UserContext = {
+        id: 'u-bc',
+        accountStatus: 'active',
+        roles: ['branch_clerk'],
+        unitAssignments: [{ unitId: 'ward-1', assignedRole: 'branch_clerk' }]
+      }
+
+      expect(simulateRecordManualAttendance(stakeClerk, activeSession, activeMemberWard1, records).success).toBe(false)
+      expect(simulateRecordManualAttendance(wardClerk, activeSession, activeMemberWard1, records).success).toBe(false)
+      expect(simulateRecordManualAttendance(branchClerk, activeSession, activeMemberWard1, records).success).toBe(false)
+    })
+  })
+
+  describe('Clerk Roles Least-Privilege & Scoped Reporting (Migration 8 Verification)', () => {
+    const eightUnitIds = [
+      'unit-abiola-way',
+      'unit-alabata',
+      'unit-apena',
+      'unit-apete',
+      'unit-camp',
+      'unit-kugba',
+      'unit-obantoko',
+      'unit-odeda'
+    ]
+
+    function makeAssignment(unitId: string, assignedRole: UnitAssignedRole): DbUserUnitAssignment {
+      return {
+        id: `ua-${unitId}-${assignedRole}`,
+        userId: 'usr-test',
+        unitId,
+        assignedRole,
+        createdAt: '2026-10-18T00:00:00Z'
+      }
+    }
+
+    // Mirrors PostgreSQL RLS + deriveLeadershipAccess for report visibility and mutations
+    function canReadUnitReport(access: ReturnType<typeof deriveLeadershipAccess>, targetUnitId: string): boolean {
+      if (access.reportUnitFilter === null) return true
+      return access.reportUnitFilter.includes(targetUnitId)
+    }
+
+    function filterExportableUnitStats<T extends { unitId: string }>(
+      allStats: T[],
+      access: ReturnType<typeof deriveLeadershipAccess>
+    ): T[] {
+      if (access.reportUnitFilter === null) return allStats
+      return allStats.filter(s => access.reportUnitFilter!.includes(s.unitId))
+    }
+
+    it('grants stake_clerk stake-wide read and export access across all 8 units while denying all write and privileged actions', () => {
+      const stakeClerkAccess = deriveLeadershipAccess(['stake_clerk'], [])
+
+      expect(stakeClerkAccess.isStakeClerk).toBe(true)
+      expect(stakeClerkAccess.hasStakeWideReadAccess).toBe(true)
+      expect(stakeClerkAccess.isClerkRoleOnly).toBe(true)
+      expect(stakeClerkAccess.reportUnitFilter).toBeNull()
+
+      // Can read and export across all 8 units
+      for (const unitId of eightUnitIds) {
+        expect(canReadUnitReport(stakeClerkAccess, unitId)).toBe(true)
+      }
+      const allUnitRows = eightUnitIds.map(unitId => ({ unitId, totalAttended: 10 }))
+      expect(filterExportableUnitStats(allUnitRows, stakeClerkAccess)).toHaveLength(8)
+
+      // Strictly denied all writes, manual check-ins, session management, user governance, and audit logs
+      expect(stakeClerkAccess.isSystemAdmin).toBe(false)
+      expect(stakeClerkAccess.isStakeLeader).toBe(false) // Blocks session reopen, audit logs, and user directory
+      expect(stakeClerkAccess.canManageActivities).toBe(false)
+      expect(stakeClerkAccess.canManageMembers).toBe(false)
+      expect(stakeClerkAccess.canRecordManualAttendance).toBe(false)
+      expect(stakeClerkAccess.manageableUnitIds).toEqual([])
+    })
+
+    it('grants ward_clerk read and export access ONLY to their assigned ward and blocks cross-unit data and all writes', () => {
+      const wardClerkAccess = deriveLeadershipAccess(
+        ['ward_clerk'],
+        [makeAssignment('unit-abiola-way', 'ward_clerk')]
+      )
+
+      expect(wardClerkAccess.isClerkRoleOnly).toBe(true)
+      expect(wardClerkAccess.hasStakeWideReadAccess).toBe(false)
+      expect(wardClerkAccess.assignedUnitIds).toEqual(['unit-abiola-way'])
+      expect(wardClerkAccess.reportUnitFilter).toEqual(['unit-abiola-way'])
+
+      // Permitted for assigned ward only
+      expect(canReadUnitReport(wardClerkAccess, 'unit-abiola-way')).toBe(true)
+      for (const otherUnit of eightUnitIds.filter(u => u !== 'unit-abiola-way')) {
+        expect(canReadUnitReport(wardClerkAccess, otherUnit)).toBe(false)
+      }
+
+      // Report export strictly filtered to assigned ward (cannot export stake-wide data)
+      const allUnitRows = eightUnitIds.map(unitId => ({ unitId, totalAttended: 5 }))
+      const exported = filterExportableUnitStats(allUnitRows, wardClerkAccess)
+      expect(exported).toEqual([{ unitId: 'unit-abiola-way', totalAttended: 5 }])
+
+      // Strictly denied all write or privileged actions
+      expect(wardClerkAccess.isSystemAdmin).toBe(false)
+      expect(wardClerkAccess.isStakeLeader).toBe(false)
+      expect(wardClerkAccess.canManageActivities).toBe(false)
+      expect(wardClerkAccess.canManageMembers).toBe(false)
+      expect(wardClerkAccess.canRecordManualAttendance).toBe(false)
+      expect(wardClerkAccess.manageableUnitIds).toEqual([])
+    })
+
+    it('grants branch_clerk read and export access ONLY to their assigned branch and blocks cross-unit data and all writes', () => {
+      const branchClerkAccess = deriveLeadershipAccess(
+        ['branch_clerk'],
+        [makeAssignment('unit-alabata', 'branch_clerk')]
+      )
+
+      expect(branchClerkAccess.isClerkRoleOnly).toBe(true)
+      expect(branchClerkAccess.hasStakeWideReadAccess).toBe(false)
+      expect(branchClerkAccess.assignedUnitIds).toEqual(['unit-alabata'])
+      expect(branchClerkAccess.reportUnitFilter).toEqual(['unit-alabata'])
+
+      // Permitted for assigned branch only
+      expect(canReadUnitReport(branchClerkAccess, 'unit-alabata')).toBe(true)
+      for (const otherUnit of eightUnitIds.filter(u => u !== 'unit-alabata')) {
+        expect(canReadUnitReport(branchClerkAccess, otherUnit)).toBe(false)
+      }
+
+      // Report export strictly filtered to assigned branch
+      const allUnitRows = eightUnitIds.map(unitId => ({ unitId, totalAttended: 7 }))
+      const exported = filterExportableUnitStats(allUnitRows, branchClerkAccess)
+      expect(exported).toEqual([{ unitId: 'unit-alabata', totalAttended: 7 }])
+
+      // Strictly denied all write or privileged actions
+      expect(branchClerkAccess.isSystemAdmin).toBe(false)
+      expect(branchClerkAccess.isStakeLeader).toBe(false)
+      expect(branchClerkAccess.canManageActivities).toBe(false)
+      expect(branchClerkAccess.canManageMembers).toBe(false)
+      expect(branchClerkAccess.canRecordManualAttendance).toBe(false)
+      expect(branchClerkAccess.manageableUnitIds).toEqual([])
+    })
+
+    it('verifies Stake YSA Representatives (Option A: ysa_leader + all 8 units) have full operational access across all 8 units without stake_presidency privileges', () => {
+      const allEightAssignments = eightUnitIds.map(unitId => makeAssignment(unitId, 'ysa_leader'))
+      const stakeYsaRepAccess = deriveLeadershipAccess(['ysa_leader'], allEightAssignments)
+
+      // Operational access across all 8 units
+      expect(stakeYsaRepAccess.canManageActivities).toBe(true)
+      expect(stakeYsaRepAccess.canManageMembers).toBe(true)
+      expect(stakeYsaRepAccess.canRecordManualAttendance).toBe(true)
+      expect(stakeYsaRepAccess.assignedUnitIds).toHaveLength(8)
+      expect(stakeYsaRepAccess.manageableUnitIds).toHaveLength(8)
+      expect(stakeYsaRepAccess.reportUnitFilter).toEqual(eightUnitIds)
+
+      for (const unitId of eightUnitIds) {
+        expect(canReadUnitReport(stakeYsaRepAccess, unitId)).toBe(true)
+      }
+
+      // Strictly denied stake_presidency and system_admin privileges (cannot reopen closed sessions, view audit logs, or manage users/units)
+      expect(stakeYsaRepAccess.isSystemAdmin).toBe(false)
+      expect(stakeYsaRepAccess.isStakeLeader).toBe(false)
+    })
   })
 })
+
