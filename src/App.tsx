@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from 'react'
-import { AuthProvider } from './context/AuthContext'
+import { AuthProvider, useAuth } from './context/AuthContext'
 import { Navbar } from './components/layout/Navbar'
 import { PublicAttendanceView } from './components/public/PublicAttendanceView'
 import { TerminalView } from './components/public/TerminalView'
 import { LeadershipPortalView } from './components/leadership/LeadershipPortalView'
 import { LeadershipRoute } from './types/database'
 import { attendanceService } from './services/attendanceService'
+import { parseAuthCallbackUrl } from './services/authService'
 
 /**
  * Pure route resolution helper functions.
@@ -13,6 +14,21 @@ import { attendanceService } from './services/attendanceService'
  */
 export function isLeadershipPath(path: string): boolean {
   return path === '/la' || path.startsWith('/la/')
+}
+
+export function resolveInitialRoutePath(
+  pathname: string,
+  hash = '',
+  search = ''
+): string {
+  if (isLeadershipPath(pathname)) {
+    return pathname
+  }
+  const callback = parseAuthCallbackUrl(hash, search)
+  if (callback.hasAuthCallback) {
+    return '/la'
+  }
+  return pathname
 }
 
 export function resolveLeadershipSubpath(path: string): LeadershipRoute {
@@ -49,8 +65,15 @@ export function extractSessionCode(path: string): string | null {
 }
 
 export const AppContent: React.FC = () => {
+  const { isPasswordRecovery, authCallbackError } = useAuth()
   const [currentPath, setCurrentPath] = useState(() =>
-    typeof window !== 'undefined' ? window.location.pathname : '/'
+    typeof window !== 'undefined'
+      ? resolveInitialRoutePath(
+          window.location.pathname,
+          window.location.hash,
+          window.location.search
+        )
+      : '/'
   )
   const [activeTerminalCode, setActiveTerminalCode] = useState<string | null>(() => {
     const meta = attendanceService.getStoredSessionMetadata()
@@ -72,6 +95,15 @@ export const AppContent: React.FC = () => {
     window.addEventListener('popstate', handlePopState)
     return () => window.removeEventListener('popstate', handlePopState)
   }, [])
+
+  useEffect(() => {
+    if ((isPasswordRecovery || authCallbackError) && !isLeadershipPath(currentPath)) {
+      if (typeof window !== 'undefined' && !isLeadershipPath(window.location.pathname)) {
+        window.history.replaceState({}, '', '/la')
+      }
+      setCurrentPath('/la')
+    }
+  }, [isPasswordRecovery, authCallbackError, currentPath])
 
   const navigateTo = (path: string) => {
     if (typeof window !== 'undefined' && window.location.pathname !== path) {

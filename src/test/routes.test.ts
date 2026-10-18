@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest'
-import { isLeadershipPath, resolveLeadershipSubpath, extractSessionCode } from '../App'
+import {
+  isLeadershipPath,
+  resolveInitialRoutePath,
+  resolveLeadershipSubpath,
+  extractSessionCode
+} from '../App'
 
 describe('Route Architecture & Separation', () => {
   it('correctly identifies leadership portal paths', () => {
@@ -30,6 +35,28 @@ describe('Route Architecture & Separation', () => {
     expect(resolveLeadershipSubpath('/la/reports')).toBe('reports')
     expect(resolveLeadershipSubpath('/la/audit-logs')).toBe('audit-logs')
     expect(resolveLeadershipSubpath('/la/unknown-route')).toBe('dashboard')
+  })
+
+  it('routes Supabase recovery, invitation, confirmation, and expired-link callbacks to /la even when landing on /', () => {
+    expect(
+      resolveInitialRoutePath('/', '#access_token=abc&refresh_token=def&type=recovery', '')
+    ).toBe('/la')
+    expect(
+      resolveInitialRoutePath('/', '#access_token=abc&refresh_token=def&type=invite', '')
+    ).toBe('/la')
+    expect(
+      resolveInitialRoutePath('/', '#access_token=abc&type=signup', '')
+    ).toBe('/la')
+    expect(
+      resolveInitialRoutePath(
+        '/',
+        '#error=access_denied&error_code=otp_expired&error_description=Email+link+is+invalid+or+has+expired',
+        ''
+      )
+    ).toBe('/la')
+    expect(resolveInitialRoutePath('/la/settings', '#type=recovery', '')).toBe('/la/settings')
+    expect(resolveInitialRoutePath('/', '', '')).toBe('/')
+    expect(resolveInitialRoutePath('/5BV21F', '', '')).toBe('/5BV21F')
   })
 
   it('extracts valid 6-character session codes from direct links', () => {

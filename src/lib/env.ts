@@ -6,9 +6,13 @@
  * - Only publishable, client-safe variables (prefixed with VITE_) are accessible.
  */
 
+export const PRODUCTION_SITE_URL = 'https://ysaams.vercel.app'
+export const PRODUCTION_AUTH_REDIRECT_URL = `${PRODUCTION_SITE_URL}/la`
+
 export interface ClientEnv {
   supabaseUrl: string
   supabaseAnonKey: string
+  siteUrl: string
   timezone: string
   stakeName: string
   isConfigured: boolean
@@ -18,6 +22,8 @@ export interface ClientEnv {
 export function validateClientEnv(): ClientEnv {
   const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || ''
   const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || ''
+  const rawSiteUrl = (import.meta.env.VITE_PUBLIC_SITE_URL || PRODUCTION_SITE_URL).trim().replace(/\/+$/, '')
+  const siteUrl = rawSiteUrl || PRODUCTION_SITE_URL
   const timezone = import.meta.env.VITE_APP_TIMEZONE || 'Africa/Lagos'
   const stakeName = import.meta.env.VITE_APP_STAKE_NAME || 'Abeokuta Nigeria Obantoko Stake'
 
@@ -32,6 +38,7 @@ export function validateClientEnv(): ClientEnv {
   return {
     supabaseUrl,
     supabaseAnonKey,
+    siteUrl,
     timezone,
     stakeName,
     isConfigured: configError === null,

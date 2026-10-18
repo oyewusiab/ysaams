@@ -63,7 +63,14 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
     canManageMembers,
     canRecordManualAttendance,
     manageableUnitIds,
-    reportUnitFilter
+    reportUnitFilter,
+    isPasswordRecovery,
+    recoveryEmail,
+    authCallbackError,
+    authCallbackNotice,
+    completePasswordRecovery,
+    cancelPasswordRecovery,
+    clearAuthCallbackFeedback
   } = useAuth()
 
   // Sign In & Recovery State
@@ -73,6 +80,11 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
   const [loginNotice, setLoginNotice] = useState<string | null>(null)
   const [isLoggingIn, setIsLoggingIn] = useState(false)
   const [isResetMode, setIsResetMode] = useState(false)
+
+  // New Password Setup State (Supabase PASSWORD_RECOVERY / Invite callback on /la)
+  const [newPassword, setNewPassword] = useState('')
+  const [confirmNewPassword, setConfirmNewPassword] = useState('')
+  const [isUpdatingPassword, setIsUpdatingPassword] = useState(false)
 
   // Common Data State
   const [units, setUnits] = useState<StakeUnit[]>([])
@@ -224,6 +236,7 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
     e.preventDefault()
     setLoginError(null)
     setLoginNotice(null)
+    clearAuthCallbackFeedback()
 
     if (isResetMode) {
       if (!loginEmail.trim()) {
@@ -256,7 +269,137 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
     }
   }
 
+  const handleUpdatePassword = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setLoginError(null)
+    setLoginNotice(null)
+
+    setIsUpdatingPassword(true)
+    const res = await authService.updatePassword(newPassword, confirmNewPassword)
+    if (!res.success) {
+      setIsUpdatingPassword(false)
+      setLoginError(res.error || 'Failed to update password.')
+      return
+    }
+
+    const completion = await completePasswordRecovery()
+    setIsUpdatingPassword(false)
+    setNewPassword('')
+    setConfirmNewPassword('')
+    if (completion.authorized) {
+      setStatusMsg({
+        type: 'success',
+        text: completion.message || 'Your leadership password has been updated.'
+      })
+    } else {
+      setLoginNotice(
+        completion.message ||
+          'Your password has been updated. Please sign in with your new password.'
+      )
+    }
+  }
+
+  if (isPasswordRecovery) {
+    return (
+      <div className="min-h-[calc(100vh-4rem)] flex items-center justify-center p-4">
+        <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-2xl p-6 sm:p-8 shadow-2xl">
+          <div className="text-center mb-6">
+            <div className="w-14 h-14 bg-emerald-950/80 border border-emerald-500/30 text-emerald-400 rounded-2xl flex items-center justify-center mx-auto mb-4">
+              <Lock className="w-7 h-7" />
+            </div>
+            <h2 className="text-2xl font-bold text-white tracking-tight">Set Leadership Password</h2>
+            <p className="text-sm text-slate-400 mt-1">
+              {recoveryEmail
+                ? `Create a new password for ${recoveryEmail}`
+                : 'Enter and confirm your new leadership portal password below.'}
+            </p>
+          </div>
+
+          {loginError && (
+            <div className="mb-4 p-3 bg-red-950/70 border border-red-800 rounded-xl text-xs text-red-200 space-y-2" role="alert">
+              <div className="flex items-center space-x-2">
+                <AlertCircle className="w-4 h-4 text-red-400 flex-shrink-0" />
+                <span>{loginError}</span>
+              </div>
+              <button
+                type="button"
+                onClick={async () => {
+                  if (recoveryEmail) setLoginEmail(recoveryEmail)
+                  setLoginError(null)
+                  await cancelPasswordRecovery()
+                  setIsResetMode(true)
+                }}
+                className="inline-flex items-center text-xs font-semibold text-emerald-400 hover:text-emerald-300 underline"
+              >
+                Request a fresh recovery link
+              </button>
+            </div>
+          )}
+
+          <form onSubmit={handleUpdatePassword} className="space-y-4">
+            <div>
+              <label htmlFor="new-leader-password" className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">
+                New Password
+              </label>
+              <input
+                id="new-leader-password"
+                type="password"
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                placeholder="Minimum 8 characters"
+                minLength={8}
+                required
+                className="w-full px-4 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm"
+              />
+            </div>
+
+            <div>
+              <label htmlFor="confirm-leader-password" className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">
+                Confirm New Password
+              </label>
+              <input
+                id="confirm-leader-password"
+                type="password"
+                value={confirmNewPassword}
+                onChange={(e) => setConfirmNewPassword(e.target.value)}
+                placeholder="Re-enter new password"
+                minLength={8}
+                required
+                className="w-full px-4 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm"
+              />
+            </div>
+
+            <button
+              type="submit"
+              disabled={isUpdatingPassword}
+              className="w-full py-3 px-4 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold rounded-xl shadow-lg shadow-emerald-900/30 flex items-center justify-center space-x-2 transition text-sm disabled:opacity-50"
+            >
+              <span>{isUpdatingPassword ? 'Updating Password...' : 'Save New Password'}</span>
+              <ArrowRight className="w-4 h-4" />
+            </button>
+
+            <div className="text-center pt-2">
+              <button
+                type="button"
+                onClick={async () => {
+                  setLoginError(null)
+                  await cancelPasswordRecovery()
+                }}
+                className="text-xs text-slate-400 hover:text-emerald-400 transition"
+              >
+                Cancel and return to Sign In
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    )
+  }
+
   if (!isAuthenticated) {
+    const displayedError = loginError || authCallbackError
+    const displayedNotice = loginNotice || authCallbackNotice
+
     return (
       <div className="min-h-[calc(100vh-4rem)] flex items-center justify-center p-4">
         <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-2xl p-6 sm:p-8 shadow-2xl">
@@ -266,7 +409,7 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
             </div>
             <h2 className="text-2xl font-bold text-white tracking-tight">Leadership Portal</h2>
             <p className="text-sm text-slate-400 mt-1">
-              Authorized stake presidency, bishops, branch presidents & YSA leaders only.
+              Authorized stake presidency, bishops, branch presidents, clerks & YSA leaders only.
             </p>
           </div>
 
@@ -277,17 +420,34 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
             </span>
           </div>
 
-          {loginError && (
-            <div className="mb-4 p-3 bg-red-950/70 border border-red-800 rounded-xl text-xs text-red-200 flex items-center space-x-2" role="alert">
-              <AlertCircle className="w-4 h-4 text-red-400 flex-shrink-0" />
-              <span>{loginError}</span>
+          {displayedError && (
+            <div className="mb-4 p-3 bg-red-950/70 border border-red-800 rounded-xl text-xs text-red-200 space-y-2" role="alert">
+              <div className="flex items-center space-x-2">
+                <AlertCircle className="w-4 h-4 text-red-400 flex-shrink-0" />
+                <span>{displayedError}</span>
+              </div>
+              {authCallbackError && !isResetMode && (
+                <div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      clearAuthCallbackFeedback()
+                      setLoginError(null)
+                      setIsResetMode(true)
+                    }}
+                    className="inline-flex items-center text-xs font-semibold text-emerald-400 hover:text-emerald-300 underline"
+                  >
+                    Request a fresh recovery link
+                  </button>
+                </div>
+              )}
             </div>
           )}
 
-          {loginNotice && (
+          {displayedNotice && (
             <div className="mb-4 p-3 bg-emerald-950/70 border border-emerald-800 rounded-xl text-xs text-emerald-200 flex items-center space-x-2" role="status">
               <CheckCircle2 className="w-4 h-4 text-emerald-400 flex-shrink-0" />
-              <span>{loginNotice}</span>
+              <span>{displayedNotice}</span>
             </div>
           )}
 
@@ -346,6 +506,7 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
                   setIsResetMode(!isResetMode)
                   setLoginError(null)
                   setLoginNotice(null)
+                  clearAuthCallbackFeedback()
                 }}
                 className="text-xs text-slate-400 hover:text-emerald-400 transition"
               >

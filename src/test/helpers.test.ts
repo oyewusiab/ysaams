@@ -1,7 +1,12 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { generateSessionCode } from '../services/activityService'
 import { calculateAttendancePercentage, getMonthDateRange } from '../services/reportService'
-import { validateAuthorizedProfile } from '../services/authService'
+import {
+  validateAuthorizedProfile,
+  resolveAuthRedirectUrl,
+  parseAuthCallbackUrl,
+  validateNewPassword
+} from '../services/authService'
 import { attendanceService } from '../services/attendanceService'
 import { UserProfile } from '../types/database'
 
@@ -98,6 +103,66 @@ describe('Domain Helper Engines', () => {
       const ok = validateAuthorizedProfile(baseProfile)
       expect(ok.authorized).toBe(true)
       expect(ok.error).toBeUndefined()
+    })
+  })
+
+  describe('Production & Local Auth Redirect Resolution (resolveAuthRedirectUrl)', () => {
+    it('explicitly redirects to https://ysaams.vercel.app/la in production', () => {
+      expect(resolveAuthRedirectUrl('https://ysaams.vercel.app')).toBe(
+        'https://ysaams.vercel.app/la'
+      )
+      expect(resolveAuthRedirectUrl('https://ysaams-git-main-oyewusiab.vercel.app')).toBe(
+        'https://ysaams.vercel.app/la'
+      )
+      expect(resolveAuthRedirectUrl('')).toBe('https://ysaams.vercel.app/la')
+    })
+
+    it('uses the current origin /la when running locally on localhost or 127.0.0.1', () => {
+      expect(resolveAuthRedirectUrl('http://localhost:5173')).toBe(
+        'http://localhost:5173/la'
+      )
+      expect(resolveAuthRedirectUrl('http://127.0.0.1:4173/')).toBe(
+        'http://127.0.0.1:4173/la'
+      )
+    })
+  })
+
+  describe('Supabase Auth Callback & Recovery Link Parsing (parseAuthCallbackUrl)', () => {
+    it('detects valid password recovery and invite callbacks', () => {
+      const recovery = parseAuthCallbackUrl(
+        '#access_token=tok&refresh_token=ref&type=recovery',
+        ''
+      )
+      expect(recovery.hasAuthCallback).toBe(true)
+      expect(recovery.isPasswordRecovery).toBe(true)
+      expect(recovery.errorMessage).toBeNull()
+
+      const invite = parseAuthCallbackUrl(
+        '#access_token=tok&refresh_token=ref&type=invite',
+        ''
+      )
+      expect(invite.hasAuthCallback).toBe(true)
+      expect(invite.isInvite).toBe(true)
+      expect(invite.isPasswordRecovery).toBe(true)
+      expect(invite.errorMessage).toBeNull()
+    })
+
+    it('detects expired or invalid recovery links and returns a clear user-facing error message', () => {
+      const expired = parseAuthCallbackUrl(
+        '#error=access_denied&error_code=otp_expired&error_description=Email+link+is+invalid+or+has+expired',
+        ''
+      )
+      expect(expired.hasAuthCallback).toBe(true)
+      expect(expired.isPasswordRecovery).toBe(false)
+      expect(expired.errorCode).toBe('otp_expired')
+      expect(expired.errorMessage).toContain('invalid or has expired')
+      expect(expired.errorMessage).toContain('request a fresh recovery link')
+    })
+
+    it('validates new leadership password length and confirmation match', () => {
+      expect(validateNewPassword('short', 'short').valid).toBe(false)
+      expect(validateNewPassword('ValidPass123!', 'Mismatch123!').valid).toBe(false)
+      expect(validateNewPassword('ValidPass123!', 'ValidPass123!').valid).toBe(true)
     })
   })
 
