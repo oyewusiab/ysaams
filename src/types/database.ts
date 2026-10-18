@@ -18,6 +18,17 @@ export interface StakeUnit {
   unitType: UnitType
   isActive: boolean
   createdAt: string
+  updatedAt?: string
+}
+
+export interface UserUnitAssignment {
+  id: string
+  userId: string
+  unitId: string
+  assignedRole: 'bishop' | 'branch_president' | 'ysa_leader'
+  assignedBy?: string | null
+  createdAt: string
+  unitName?: string
 }
 
 export interface UserProfile {
@@ -25,18 +36,37 @@ export interface UserProfile {
   fullName: string
   email: string
   roles: AppRole[]
+  unitAssignments?: UserUnitAssignment[]
   unitId?: string | null
   accountStatus: 'active' | 'deactivated' | 'pending'
   createdAt: string
+  updatedAt?: string
+}
+
+export interface MemberRecord {
+  id: string
+  memberNumber?: string | null
+  fullName: string
+  preferredName?: string | null
+  gender?: 'male' | 'female' | null
+  phoneNumber?: string | null
+  email?: string | null
+  homeUnitId: string
+  homeUnitName?: string
+  isActive: boolean
+  createdAt: string
+  updatedAt?: string
 }
 
 export interface ActivityDefinition {
   id: string
   title: string
-  description?: string
+  description?: string | null
   category: 'spiritual' | 'social' | 'service' | 'sports' | 'temple' | 'educational' | 'other'
+  defaultParticipatingUnits?: string[] | null
   createdBy: string
   createdAt: string
+  updatedAt?: string
 }
 
 export interface ActivitySession {
@@ -45,15 +75,20 @@ export interface ActivitySession {
   sessionTitle: string
   sessionDate: string
   startTime: string
+  scheduledEndTime?: string | null
   timezone: string
   status: 'draft' | 'active' | 'closed'
   maxTerminals: number
-  codeHash?: string
-  codeExpiresAt?: string
+  codeHash?: string | null
+  codeExpiresAt?: string | null
   visitorRegistrationEnabled: boolean
   participatingUnits?: string[] | null
-  closedAt?: string
-  closedBy?: string
+  initiatedBy?: string | null
+  initiatedAt?: string | null
+  closedAt?: string | null
+  closedBy?: string | null
+  createdAt: string
+  updatedAt?: string
 }
 
 export interface TerminalAuthorization {
@@ -63,17 +98,44 @@ export interface TerminalAuthorization {
   terminalLabel: string
   leaseExpiresAt: string
   isRevoked: boolean
+  lastSeenAt?: string
 }
 
 export interface AttendanceRecord {
   id: string
   sessionId: string
-  memberId?: string
+  memberId?: string | null
   attendeeName: string
   isNonMember: boolean
   unitId?: string | null
+  unitName?: string | null
   checkInTime: string
-  recordedByTerminalId?: string
+  recordedByTerminalId?: string | null
+  isManual?: boolean
+}
+
+export interface SessionVisitor {
+  id: string
+  sessionId: string
+  fullName: string
+  contactPhone?: string | null
+  isChurchMember: boolean
+  invitingUnitId?: string | null
+  invitingUnitName?: string | null
+  recordedByTerminalId?: string | null
+  createdAt: string
+}
+
+export interface AuditLogEntry {
+  id: string
+  actorId?: string | null
+  actorName?: string | null
+  action: string
+  targetRecordId?: string | null
+  targetTable?: string | null
+  outcome: 'success' | 'failure'
+  metadata: Record<string, unknown>
+  createdAt: string
 }
 
 export type LeadershipRoute =

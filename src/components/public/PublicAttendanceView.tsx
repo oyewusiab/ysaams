@@ -1,9 +1,10 @@
 import React, { useState } from 'react'
-import { ShieldCheck, ArrowRight, Smartphone, AlertCircle } from 'lucide-react'
+import { ShieldCheck, ArrowRight, Smartphone, AlertCircle, Loader2 } from 'lucide-react'
+import { attendanceService } from '../../services/attendanceService'
 
 interface PublicAttendanceViewProps {
   initialCode?: string
-  onCodeRedeemed: (sessionCode: string) => void
+  onCodeRedeemed: (sessionCode: string, sessionTitle?: string, sessionDate?: string) => void
 }
 
 export const PublicAttendanceView: React.FC<PublicAttendanceViewProps> = ({
@@ -14,7 +15,7 @@ export const PublicAttendanceView: React.FC<PublicAttendanceViewProps> = ({
   const [error, setError] = useState<string | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     const cleanCode = code.trim().toUpperCase()
 
@@ -31,9 +32,15 @@ export const PublicAttendanceView: React.FC<PublicAttendanceViewProps> = ({
     setError(null)
     setIsSubmitting(true)
 
-    // Trigger redemption flow
-    onCodeRedeemed(cleanCode)
+    // Invoke atomic terminal authorization RPC
+    const res = await attendanceService.authorizeTerminal(cleanCode, 'Public Terminal Kiosk')
     setIsSubmitting(false)
+
+    if (res.success) {
+      onCodeRedeemed(cleanCode, res.sessionTitle, res.sessionDate)
+    } else {
+      setError(res.error || 'Failed to connect terminal. Please verify session code.')
+    }
   }
 
   return (
@@ -72,7 +79,8 @@ export const PublicAttendanceView: React.FC<PublicAttendanceViewProps> = ({
               onChange={(e) => setCode(e.target.value.toUpperCase())}
               placeholder="e.g. 5BV21F"
               autoComplete="off"
-              className="w-full px-4 py-3 bg-slate-950 border border-slate-800 rounded-xl text-center text-2xl font-mono font-bold tracking-widest text-emerald-400 placeholder:text-slate-700 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition uppercase"
+              disabled={isSubmitting}
+              className="w-full px-4 py-3 bg-slate-950 border border-slate-800 rounded-xl text-center text-2xl font-mono font-bold tracking-widest text-emerald-400 placeholder:text-slate-700 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition uppercase disabled:opacity-50"
             />
           </div>
 
@@ -81,8 +89,17 @@ export const PublicAttendanceView: React.FC<PublicAttendanceViewProps> = ({
             disabled={isSubmitting}
             className="w-full py-3.5 px-4 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold rounded-xl shadow-lg shadow-emerald-900/30 flex items-center justify-center space-x-2 transition disabled:opacity-50"
           >
-            <span>Connect to Session</span>
-            <ArrowRight className="w-4 h-4" />
+            {isSubmitting ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin" />
+                <span>Authorizing Kiosk...</span>
+              </>
+            ) : (
+              <>
+                <span>Connect to Session</span>
+                <ArrowRight className="w-4 h-4" />
+              </>
+            )}
           </button>
         </form>
 

@@ -3,10 +3,16 @@ import { AppRole } from '../types/database'
 
 // --- Mock In-Memory Domain Engine for Pure Unit Testing ---
 
+interface UserUnitAssignment {
+  unitId: string
+  assignedRole: 'bishop' | 'branch_president' | 'ysa_leader'
+}
+
 interface UserContext {
   id: string
+  accountStatus: 'active' | 'deactivated' | 'pending'
   roles: AppRole[]
-  assignedUnits: string[]
+  unitAssignments: UserUnitAssignment[]
 }
 
 interface MockSession {
@@ -15,6 +21,7 @@ interface MockSession {
   status: 'draft' | 'active' | 'closed'
   codeExpiresAt: number // epoch ms
   maxTerminals: number
+  participatingUnits?: string[] | null
   terminals: { id: string; token: string; leaseExpiresAt: number; isRevoked: boolean }[]
 }
 
@@ -30,7 +37,7 @@ function hasStakeWideAccess(user: UserContext): boolean {
 
 function canAccessUnitData(user: UserContext, unitId: string): boolean {
   if (hasStakeWideAccess(user)) return true
-  return user.assignedUnits.includes(unitId)
+  return user.unitAssignments.some(ua => ua.unitId === unitId)
 }
 
 function authorizeTerminalDevice(
@@ -68,14 +75,16 @@ describe('Domain Rules & Invariant Validation (Pure Unit Tests)', () => {
   describe('Role Permission Boundaries & Unit Scoping', () => {
     const bishopWard1: UserContext = {
       id: 'usr-bishop-1',
+      accountStatus: 'active',
       roles: ['bishop'],
-      assignedUnits: ['ward-1']
+      unitAssignments: [{ unitId: 'ward-1', assignedRole: 'bishop' }]
     }
 
     const stakePresident: UserContext = {
       id: 'usr-stake-pres',
+      accountStatus: 'active',
       roles: ['stake_presidency'],
-      assignedUnits: []
+      unitAssignments: []
     }
 
     it('allows a Bishop to access their own ward data', () => {
@@ -227,14 +236,405 @@ describe('Domain Rules & Invariant Validation (Pure Unit Tests)', () => {
     }
 
     it('allows System Admin and Stake Presidency to reopen a session', () => {
-      expect(canReopenSession({ id: 'u1', roles: ['system_admin'], assignedUnits: [] })).toBe(true)
-      expect(canReopenSession({ id: 'u2', roles: ['stake_presidency'], assignedUnits: [] })).toBe(true)
+      expect(canReopenSession({ id: 'u1', accountStatus: 'active', roles: ['system_admin'], unitAssignments: [] })).toBe(true)
+      expect(canReopenSession({ id: 'u2', accountStatus: 'active', roles: ['stake_presidency'], unitAssignments: [] })).toBe(true)
     })
 
     it('denies YSA Leaders, Bishops, and Branch Presidents from reopening closed sessions', () => {
-      expect(canReopenSession({ id: 'u3', roles: ['ysa_leader'], assignedUnits: [] })).toBe(false)
-      expect(canReopenSession({ id: 'u4', roles: ['bishop'], assignedUnits: ['ward-1'] })).toBe(false)
-      expect(canReopenSession({ id: 'u5', roles: ['branch_president'], assignedUnits: ['branch-1'] })).toBe(false)
+      expect(canReopenSession({ id: 'u3', accountStatus: 'active', roles: ['ysa_leader'], unitAssignments: [] })).toBe(false)
+      expect(canReopenSession({ id: 'u4', accountStatus: 'active', roles: ['bishop'], unitAssignments: [{ unitId: 'ward-1', assignedRole: 'bishop' }] })).toBe(false)
+      expect(canReopenSession({ id: 'u5', accountStatus: 'active', roles: ['branch_president'], unitAssignments: [{ unitId: 'branch-1', assignedRole: 'branch_president' }] })).toBe(false)
+    })
+  })
+
+  describe('Phase 2B Security Remediation: Profile Column Immutability & Visitor Scoping', () => {
+    // Model fn_protect_profile_fields trigger logic
+    function simulateProfileUpdate(
+      user: UserContext,
+      currentRecord: { id: string; fullName: string; email: string; accountStatus: string },
+      updatedRecord: { id: string; fullName: string; email: string; accountStatus: string }
+    ): { success: boolean; error?: string } {
+      const isAdmin = user.roles.includes('system_admin')
+
+      if (!isAdmin) {
+        if (updatedRecord.accountStatus !== currentRecord.accountStatus) {
+          return { success: false, error: 'Unauthorized: Only system administrators can alter account status.' }
+        }
+        if (updatedRecord.email !== currentRecord.email) {
+          return { success: false, error: 'Unauthorized: Profile email address cannot be changed directly.' }
+        }
+      }
+
+      return { success: true }
+    }
+
+    it('prevents non-admin user from escalating their own account_status', () => {
+      const regularUser: UserContext = { id: 'u-reg', accountStatus: 'pending', roles: ['ysa_leader'], unitAssignments: [{ unitId: 'ward-1', assignedRole: 'ysa_leader' }] }
+      const current = { id: 'u-reg', fullName: 'John Doe', email: 'john@example.com', accountStatus: 'pending' }
+      const malicious = { ...current, accountStatus: 'active' }
+
+      const res = simulateProfileUpdate(regularUser, current, malicious)
+      expect(res.success).toBe(false)
+      expect(res.error).toContain('Only system administrators can alter account status')
+    })
+
+    it('prevents non-admin user from changing profile email address', () => {
+      const regularUser: UserContext = { id: 'u-reg', accountStatus: 'active', roles: ['ysa_leader'], unitAssignments: [{ unitId: 'ward-1', assignedRole: 'ysa_leader' }] }
+      const current = { id: 'u-reg', fullName: 'John Doe', email: 'john@example.com', accountStatus: 'active' }
+      const malicious = { ...current, email: 'hijacked@attacker.com' }
+
+      const res = simulateProfileUpdate(regularUser, current, malicious)
+      expect(res.success).toBe(false)
+      expect(res.error).toContain('Profile email address cannot be changed directly')
+    })
+
+    it('allows system_admin to update account_status and email', () => {
+      const admin: UserContext = { id: 'u-admin', accountStatus: 'active', roles: ['system_admin'], unitAssignments: [] }
+      const current = { id: 'u-reg', fullName: 'John Doe', email: 'john@example.com', accountStatus: 'pending' }
+      const updated = { ...current, accountStatus: 'active', email: 'verified@example.com' }
+
+      const res = simulateProfileUpdate(admin, current, updated)
+      expect(res.success).toBe(true)
+    })
+
+    // Model SEC-04 visitor visibility scoping logic
+    function canViewVisitor(
+      user: UserContext,
+      visitor: { invitingUnitId: string | null }
+    ): boolean {
+      if (hasStakeWideAccess(user)) return true
+      if (visitor.invitingUnitId === null) return false // Unassigned visitors are stake-wide only
+      return user.unitAssignments.some(ua => ua.unitId === visitor.invitingUnitId)
+    }
+
+    it('hides unassigned visitors from local ward bishops', () => {
+      const bishop: UserContext = { id: 'b1', accountStatus: 'active', roles: ['bishop'], unitAssignments: [{ unitId: 'ward-1', assignedRole: 'bishop' }] }
+      const unassignedVisitor = { invitingUnitId: null }
+
+      expect(canViewVisitor(bishop, unassignedVisitor)).toBe(false)
+    })
+
+    it('allows ward bishops to view visitors invited specifically by their unit', () => {
+      const bishop: UserContext = { id: 'b1', accountStatus: 'active', roles: ['bishop'], unitAssignments: [{ unitId: 'ward-1', assignedRole: 'bishop' }] }
+      const ward1Visitor = { invitingUnitId: 'ward-1' }
+      const ward2Visitor = { invitingUnitId: 'ward-2' }
+
+      expect(canViewVisitor(bishop, ward1Visitor)).toBe(true)
+      expect(canViewVisitor(bishop, ward2Visitor)).toBe(false)
+    })
+
+    it('allows stake presidency to view all visitors including unassigned', () => {
+      const stakeLeader: UserContext = { id: 'sp1', accountStatus: 'active', roles: ['stake_presidency'], unitAssignments: [] }
+      const unassignedVisitor = { invitingUnitId: null }
+      const ward1Visitor = { invitingUnitId: 'ward-1' }
+
+      expect(canViewVisitor(stakeLeader, unassignedVisitor)).toBe(true)
+      expect(canViewVisitor(stakeLeader, ward1Visitor)).toBe(true)
+    })
+  })
+
+  describe('Targeted Manual Attendance Authorization (Migration 6 Verification)', () => {
+    interface MemberRecord {
+      id: string
+      fullName: string
+      homeUnitId: string
+      isActive: boolean
+    }
+
+    function simulateRecordManualAttendance(
+      caller: UserContext | null,
+      session: MockSession,
+      member: MemberRecord,
+      existingRecords: AttendanceEntry[],
+      isConcurrentRace: boolean = false
+    ): { success: boolean; error?: string } {
+      // 1. Authentication check
+      if (!caller || !caller.id) {
+        return { success: false, error: 'Authentication required: Anonymous callers cannot record manual attendance.' }
+      }
+
+      // 2. Caller account status
+      if (caller.accountStatus !== 'active') {
+        return { success: false, error: 'Unauthorized: Caller account is deactivated, pending, or does not exist.' }
+      }
+
+      // 3. Session status
+      if (session.status !== 'active') {
+        return { success: false, error: `Attendance session is ${session.status} and cannot accept check-ins.` }
+      }
+
+      // 4. Member active check
+      if (!member.isActive) {
+        return { success: false, error: 'Member is inactive and cannot be checked in.' }
+      }
+
+      // 5. Participating units restriction
+      if (session.participatingUnits && session.participatingUnits.length > 0) {
+        if (!session.participatingUnits.includes(member.homeUnitId)) {
+          return { success: false, error: 'Member home unit is not authorized for this session (participating units restriction).' }
+        }
+      }
+
+      // 6. Role & Unit Authorization Check
+      const isStake = hasStakeWideAccess(caller)
+      let isAuthorizedUnitLeader = false
+
+      if (!isStake) {
+        // Must have matching role in user_roles AND matching unit assignment with same role
+        isAuthorizedUnitLeader = caller.roles.some(r =>
+          ['bishop', 'branch_president', 'ysa_leader'].includes(r) &&
+          caller.unitAssignments.some(ua => ua.unitId === member.homeUnitId && ua.assignedRole === r)
+        )
+      }
+
+      if (!isStake && !isAuthorizedUnitLeader) {
+        return { success: false, error: 'Unauthorized: Caller does not have an authorized leadership role assigned to the member unit.' }
+      }
+
+      // 7. Duplicate check-in pre-check
+      if (existingRecords.some(r => r.sessionId === session.id && r.memberId === member.id)) {
+        return { success: false, error: `Duplicate check-in: ${member.fullName} is already marked present for this session.` }
+      }
+
+      // 8. Concurrent race condition check (simulate unique violation trap)
+      if (isConcurrentRace) {
+        return { success: false, error: `Duplicate check-in: ${member.fullName} was concurrently marked present for this session.` }
+      }
+
+      existingRecords.push({ sessionId: session.id, memberId: member.id, recordedUnitId: member.homeUnitId })
+      return { success: true }
+    }
+
+    const activeSession: MockSession = {
+      id: 'sess-active',
+      codeHash: 'h',
+      status: 'active',
+      codeExpiresAt: Date.now() + 100000,
+      maxTerminals: 5,
+      participatingUnits: null,
+      terminals: []
+    }
+
+    const activeMemberWard1: MemberRecord = {
+      id: 'mem-1',
+      fullName: 'Br. John Obantoko',
+      homeUnitId: 'ward-1',
+      isActive: true
+    }
+
+    it('rejects unauthenticated (anonymous) callers', () => {
+      const records: AttendanceEntry[] = []
+      const res = simulateRecordManualAttendance(null, activeSession, activeMemberWard1, records)
+      expect(res.success).toBe(false)
+      expect(res.error).toContain('Authentication required')
+    })
+
+    it('rejects deactivated or pending caller accounts', () => {
+      const records: AttendanceEntry[] = []
+      const deactivatedAdmin: UserContext = {
+        id: 'u-deact',
+        accountStatus: 'deactivated',
+        roles: ['system_admin'],
+        unitAssignments: []
+      }
+      const res = simulateRecordManualAttendance(deactivatedAdmin, activeSession, activeMemberWard1, records)
+      expect(res.success).toBe(false)
+      expect(res.error).toContain('Caller account is deactivated, pending, or does not exist')
+    })
+
+    it('allows stake-wide leaders (stake_presidency & system_admin) stake-wide check-in authority', () => {
+      const records: AttendanceEntry[] = []
+      const stakePres: UserContext = {
+        id: 'u-sp',
+        accountStatus: 'active',
+        roles: ['stake_presidency'],
+        unitAssignments: []
+      }
+      const sysAdmin: UserContext = {
+        id: 'u-admin',
+        accountStatus: 'active',
+        roles: ['system_admin'],
+        unitAssignments: []
+      }
+
+      const res1 = simulateRecordManualAttendance(stakePres, activeSession, activeMemberWard1, records)
+      expect(res1.success).toBe(true)
+
+      const activeMemberWard2: MemberRecord = {
+        id: 'mem-2',
+        fullName: 'Sr. Mary Obantoko',
+        homeUnitId: 'ward-2',
+        isActive: true
+      }
+      const res2 = simulateRecordManualAttendance(sysAdmin, activeSession, activeMemberWard2, records)
+      expect(res2.success).toBe(true)
+    })
+
+    it('allows assigned unit leaders with matching role and matching unit assignment', () => {
+      const records: AttendanceEntry[] = []
+      const bishopWard1: UserContext = {
+        id: 'u-bishop-w1',
+        accountStatus: 'active',
+        roles: ['bishop'],
+        unitAssignments: [{ unitId: 'ward-1', assignedRole: 'bishop' }]
+      }
+      const ysaLeaderWard1: UserContext = {
+        id: 'u-ysa-w1',
+        accountStatus: 'active',
+        roles: ['ysa_leader'],
+        unitAssignments: [{ unitId: 'ward-1', assignedRole: 'ysa_leader' }]
+      }
+
+      const res1 = simulateRecordManualAttendance(bishopWard1, activeSession, activeMemberWard1, records)
+      expect(res1.success).toBe(true)
+
+      const activeMemberWard1B: MemberRecord = {
+        id: 'mem-1b',
+        fullName: 'Br. David Ward1',
+        homeUnitId: 'ward-1',
+        isActive: true
+      }
+      const res2 = simulateRecordManualAttendance(ysaLeaderWard1, activeSession, activeMemberWard1B, records)
+      expect(res2.success).toBe(true)
+    })
+
+    it('denies unit YSA leader without matching unit assignment from gaining stake-wide access', () => {
+      const records: AttendanceEntry[] = []
+      // User has ysa_leader role globally, but NO unit assignments
+      const unassignedYsaLeader: UserContext = {
+        id: 'u-ysa-unassigned',
+        accountStatus: 'active',
+        roles: ['ysa_leader'],
+        unitAssignments: []
+      }
+
+      const res = simulateRecordManualAttendance(unassignedYsaLeader, activeSession, activeMemberWard1, records)
+      expect(res.success).toBe(false)
+      expect(res.error).toContain('Unauthorized: Caller does not have an authorized leadership role assigned to the member unit')
+    })
+
+    it('denies cross-unit check-ins by ward leaders for members of other units', () => {
+      const records: AttendanceEntry[] = []
+      const bishopWard2: UserContext = {
+        id: 'u-bishop-w2',
+        accountStatus: 'active',
+        roles: ['bishop'],
+        unitAssignments: [{ unitId: 'ward-2', assignedRole: 'bishop' }]
+      }
+
+      const res = simulateRecordManualAttendance(bishopWard2, activeSession, activeMemberWard1, records)
+      expect(res.success).toBe(false)
+      expect(res.error).toContain('Unauthorized: Caller does not have an authorized leadership role assigned to the member unit')
+    })
+
+    it('denies check-in if leader role in user_roles does not match assigned_role in unit_assignments', () => {
+      const records: AttendanceEntry[] = []
+      // User has 'bishop' in unit assignments, but only 'branch_president' in user_roles (role mismatch)
+      const mismatchedLeader: UserContext = {
+        id: 'u-mismatch',
+        accountStatus: 'active',
+        roles: ['branch_president'],
+        unitAssignments: [{ unitId: 'ward-1', assignedRole: 'bishop' }]
+      }
+
+      const res = simulateRecordManualAttendance(mismatchedLeader, activeSession, activeMemberWard1, records)
+      expect(res.success).toBe(false)
+      expect(res.error).toContain('Unauthorized: Caller does not have an authorized leadership role assigned to the member unit')
+    })
+
+    it('rejects check-in for inactive members', () => {
+      const records: AttendanceEntry[] = []
+      const stakePres: UserContext = {
+        id: 'u-sp',
+        accountStatus: 'active',
+        roles: ['stake_presidency'],
+        unitAssignments: []
+      }
+      const inactiveMember: MemberRecord = {
+        id: 'mem-inact',
+        fullName: 'Inactive Member',
+        homeUnitId: 'ward-1',
+        isActive: false
+      }
+
+      const res = simulateRecordManualAttendance(stakePres, activeSession, inactiveMember, records)
+      expect(res.success).toBe(false)
+      expect(res.error).toContain('Member is inactive and cannot be checked in')
+    })
+
+    it('rejects check-ins when session status is closed or draft', () => {
+      const records: AttendanceEntry[] = []
+      const stakePres: UserContext = {
+        id: 'u-sp',
+        accountStatus: 'active',
+        roles: ['stake_presidency'],
+        unitAssignments: []
+      }
+      const closedSession: MockSession = { ...activeSession, status: 'closed' }
+      const draftSession: MockSession = { ...activeSession, status: 'draft' }
+
+      const resClosed = simulateRecordManualAttendance(stakePres, closedSession, activeMemberWard1, records)
+      expect(resClosed.success).toBe(false)
+      expect(resClosed.error).toContain('Attendance session is closed and cannot accept check-ins')
+
+      const resDraft = simulateRecordManualAttendance(stakePres, draftSession, activeMemberWard1, records)
+      expect(resDraft.success).toBe(false)
+      expect(resDraft.error).toContain('Attendance session is draft and cannot accept check-ins')
+    })
+
+    it('enforces session participating_units restriction', () => {
+      const records: AttendanceEntry[] = []
+      const stakePres: UserContext = {
+        id: 'u-sp',
+        accountStatus: 'active',
+        roles: ['stake_presidency'],
+        unitAssignments: []
+      }
+      // Restricted session: only allows ward-2 and ward-3
+      const restrictedSession: MockSession = {
+        ...activeSession,
+        participatingUnits: ['ward-2', 'ward-3']
+      }
+
+      // Member belongs to ward-1 (not in participating_units)
+      const res = simulateRecordManualAttendance(stakePres, restrictedSession, activeMemberWard1, records)
+      expect(res.success).toBe(false)
+      expect(res.error).toContain('Member home unit is not authorized for this session (participating units restriction)')
+
+      // Member belongs to ward-2 (in participating_units)
+      const allowedMember: MemberRecord = {
+        id: 'mem-w2',
+        fullName: 'Br. Peter Ward2',
+        homeUnitId: 'ward-2',
+        isActive: true
+      }
+      const resAllowed = simulateRecordManualAttendance(stakePres, restrictedSession, allowedMember, records)
+      expect(resAllowed.success).toBe(true)
+    })
+
+    it('rejects duplicate submissions and traps concurrent unique_violation races', () => {
+      const records: AttendanceEntry[] = []
+      const stakePres: UserContext = {
+        id: 'u-sp',
+        accountStatus: 'active',
+        roles: ['stake_presidency'],
+        unitAssignments: []
+      }
+
+      // First check-in succeeds
+      const first = simulateRecordManualAttendance(stakePres, activeSession, activeMemberWard1, records)
+      expect(first.success).toBe(true)
+
+      // Sequential duplicate submission
+      const duplicate = simulateRecordManualAttendance(stakePres, activeSession, activeMemberWard1, records)
+      expect(duplicate.success).toBe(false)
+      expect(duplicate.error).toContain('Duplicate check-in: Br. John Obantoko is already marked present')
+
+      // Concurrent race condition trap
+      const freshMember: MemberRecord = { id: 'mem-race', fullName: 'Race Member', homeUnitId: 'ward-1', isActive: true }
+      const concurrentRace = simulateRecordManualAttendance(stakePres, activeSession, freshMember, records, true)
+      expect(concurrentRace.success).toBe(false)
+      expect(concurrentRace.error).toContain('was concurrently marked present for this session')
     })
   })
 })

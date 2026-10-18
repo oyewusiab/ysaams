@@ -5,12 +5,14 @@ import path from 'path'
 describe('Migration Static Contract & Verification Tests', () => {
   const migrationsDir = path.resolve(__dirname, '../../supabase/migrations')
 
-  it('contains all 4 sequentially versioned migration files for Phase 2', () => {
+  it('contains all 6 sequentially versioned migration files for Phase 2', () => {
     const files = fs.readdirSync(migrationsDir).filter(f => f.endsWith('.sql'))
     expect(files).toContain('20261013000001_core_identity_and_units.sql')
     expect(files).toContain('20261013000002_core_rls_policies.sql')
     expect(files).toContain('20261013000003_activity_and_attendance_schema.sql')
     expect(files).toContain('20261013000004_attendance_engine_rpcs.sql')
+    expect(files).toContain('20261013000005_security_and_privilege_remediation.sql')
+    expect(files).toContain('20261018000006_targeted_manual_attendance_authorization.sql')
   })
 
   it('verifies Migration 1 defines all core identity tables and immutability triggers', () => {
@@ -54,5 +56,62 @@ describe('Migration Static Contract & Verification Tests', () => {
     expect(content).toContain('reopen_attendance_session')
     expect(content).toContain('SET search_path = public, extensions, pg_temp')
     expect(content).toContain('FOR UPDATE') // Row-level locking
+  })
+
+  it('verifies Migration 5 remediates all 12 tables privileges, audit logs, profile triggers, and manual check-in', () => {
+    const content = fs.readFileSync(path.join(migrationsDir, '20261013000005_security_and_privilege_remediation.sql'), 'utf-8')
+    // SEC-01: Drop fabricated audit inserts
+    expect(content).toContain('DROP POLICY IF EXISTS policy_audit_insert ON public.audit_logs')
+    // SEC-02: Comprehensive Revocation across all 12 tables
+    expect(content).toContain('REVOKE ALL ON TABLE public.stake_units FROM anon, authenticated, public')
+    expect(content).toContain('REVOKE ALL ON TABLE public.user_profiles FROM anon, authenticated, public')
+    expect(content).toContain('REVOKE ALL ON TABLE public.user_roles FROM anon, authenticated, public')
+    expect(content).toContain('REVOKE ALL ON TABLE public.user_unit_assignments FROM anon, authenticated, public')
+    expect(content).toContain('REVOKE ALL ON TABLE public.audit_logs FROM anon, authenticated, public')
+    expect(content).toContain('REVOKE ALL ON TABLE public.members FROM anon, authenticated, public')
+    expect(content).toContain('REVOKE ALL ON TABLE public.activities FROM anon, authenticated, public')
+    expect(content).toContain('REVOKE ALL ON TABLE public.activity_sessions FROM anon, authenticated, public')
+    expect(content).toContain('REVOKE ALL ON TABLE public.terminal_authorizations FROM anon, authenticated, public')
+    expect(content).toContain('REVOKE ALL ON TABLE public.attendance_records FROM anon, authenticated, public')
+    expect(content).toContain('REVOKE ALL ON TABLE public.session_visitors FROM anon, authenticated, public')
+    expect(content).toContain('REVOKE ALL ON TABLE public.session_reopening_requests FROM anon, authenticated, public')
+    // SEC-03: Sensitive Profile Field Protection Trigger
+    expect(content).toContain('trg_protect_profile_fields')
+    expect(content).toContain('account_status IS DISTINCT FROM OLD.account_status')
+    // SEC-04: Visitor visibility scoping
+    expect(content).toContain('policy_visitors_view')
+    expect(content).toContain('inviting_unit_id IS NOT NULL')
+    // SEC-06: Manual attendance RPC
+    expect(content).toContain('record_manual_attendance')
+    expect(content).toContain('SET search_path = public, extensions, pg_temp')
+  })
+
+  it('verifies Migration 6 hardens manual attendance with strict unit assignments, participating units, and unique error trap', () => {
+    const content = fs.readFileSync(path.join(migrationsDir, '20261018000006_targeted_manual_attendance_authorization.sql'), 'utf-8')
+    // Function replace and security flags
+    expect(content).toContain('CREATE OR REPLACE FUNCTION public.record_manual_attendance')
+    expect(content).toContain('SECURITY DEFINER')
+    expect(content).toContain('SET search_path = public, extensions, pg_temp')
+    // Caller status validation
+    expect(content).toContain('v_caller_status')
+    expect(content).toContain("v_caller_status != 'active'")
+    // Inactive member validation
+    expect(content).toContain('v_member.is_active IS NOT TRUE')
+    // Session participating units check
+    expect(content).toContain('v_session.participating_units IS NOT NULL')
+    expect(content).toContain('v_member.home_unit_id = ANY(v_session.participating_units)')
+    // Stake-wide check
+    expect(content).toContain('public.is_stake_wide_leader(v_caller_id)')
+    // Strict join between user_roles and user_unit_assignments with matching role
+    expect(content).toContain('JOIN public.user_unit_assignments uua')
+    expect(content).toContain('uua.assigned_role = ur.role_name')
+    expect(content).toContain('uua.unit_id = v_member.home_unit_id')
+    // Concurrent race condition trap
+    expect(content).toContain('EXCEPTION')
+    expect(content).toContain('WHEN unique_violation THEN')
+    // Anonymous revocation and explicit authenticated grant
+    expect(content).toContain('REVOKE EXECUTE ON FUNCTION public.record_manual_attendance(UUID, UUID, TEXT) FROM PUBLIC')
+    expect(content).toContain('REVOKE EXECUTE ON FUNCTION public.record_manual_attendance(UUID, UUID, TEXT) FROM anon')
+    expect(content).toContain('GRANT EXECUTE ON FUNCTION public.record_manual_attendance(UUID, UUID, TEXT) TO authenticated')
   })
 })

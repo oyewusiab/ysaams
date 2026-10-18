@@ -1,5 +1,17 @@
-import React, { useState } from 'react'
-import { CheckCircle2, User, Church, AlertCircle, LogOut } from 'lucide-react'
+import React, { useState, useEffect } from 'react'
+import {
+  CheckCircle2,
+  User,
+  Church,
+  AlertCircle,
+  LogOut,
+  Phone,
+  UserCheck
+} from 'lucide-react'
+import { attendanceService } from '../../services/attendanceService'
+import { adminService } from '../../services/adminService'
+import { memberService } from '../../services/memberService'
+import { StakeUnit, MemberRecord } from '../../types/database'
 
 interface TerminalViewProps {
   sessionTitle?: string
@@ -15,9 +27,47 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
   const [attendeeName, setAttendeeName] = useState('')
   const [isNonMember, setIsNonMember] = useState(false)
   const [selectedUnit, setSelectedUnit] = useState('')
-  const [statusMessage, setStatusMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+  const [contactPhone, setContactPhone] = useState('')
+  const [selectedMemberId, setSelectedMemberId] = useState<string | null>(null)
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const [units, setUnits] = useState<StakeUnit[]>([])
+  const [members, setMembers] = useState<MemberRecord[]>([])
+  const [filteredMembers, setFilteredMembers] = useState<MemberRecord[]>([])
+
+  const [statusMessage, setStatusMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+  const [isSubmitting, setIsSubmitting] = useState(false)
+
+  // Load active units and members for fast auto-complete on kiosk
+  useEffect(() => {
+    adminService.listUnits().then(setUnits).catch(() => {})
+    memberService.listMembers().then(setMembers).catch(() => {})
+  }, [])
+
+  // Filter members when unit is chosen or name is typed
+  useEffect(() => {
+    if (isNonMember) {
+      setFilteredMembers([])
+      return
+    }
+    let list = members
+    if (selectedUnit) {
+      list = list.filter(m => m.homeUnitId === selectedUnit)
+    }
+    if (attendeeName.trim().length > 1) {
+      const q = attendeeName.toLowerCase()
+      list = list.filter(m => m.fullName.toLowerCase().includes(q) || (m.preferredName && m.preferredName.toLowerCase().includes(q)))
+    }
+    setFilteredMembers(list.slice(0, 5))
+  }, [selectedUnit, attendeeName, isNonMember, members])
+
+  const handleSelectMember = (m: MemberRecord) => {
+    setAttendeeName(m.fullName)
+    setSelectedMemberId(m.id)
+    setSelectedUnit(m.homeUnitId)
+    setFilteredMembers([])
+  }
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
 
     if (!attendeeName.trim()) {
@@ -30,14 +80,65 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
       return
     }
 
-    // In Phase 1 initialization, confirm successful form validation
-    setStatusMessage({
-      type: 'success',
-      text: `Attendance ready for submission: ${attendeeName.trim()} (${isNonMember ? 'Non-member visitor' : 'Member'}).`
+    // Retrieve active session ID from sessionStorage
+    const sessionId = typeof window !== 'undefined' ? sessionStorage.getItem('ysaams_terminal_session_id') : null
+    if (!sessionId) {
+      setStatusMessage({ type: 'error', text: 'Terminal session lost. Please re-enter session code.' })
+      return
+    }
+
+    setIsSubmitting(true)
+    setStatusMessage(null)
+
+    // For church members, find memberId or fallback
+    let memberId = selectedMemberId
+    if (!isNonMember && !memberId) {
+      const match = members.find(m => m.fullName.toLowerCase() === attendeeName.trim().toLowerCase() && m.homeUnitId === selectedUnit)
+      if (match) {
+        memberId = match.id
+      }
+    }
+
+    if (!isNonMember && !memberId) {
+      setIsSubmitting(false)
+      setStatusMessage({
+        type: 'error',
+        text: 'Member record not found in census. Please select from the member suggestions or register as a visitor.'
+      })
+      return
+    }
+
+    const res = await attendanceService.recordAttendance({
+      sessionId,
+      attendeeName: attendeeName.trim(),
+      memberId: memberId || undefined,
+      isNonMember,
+      unitId: selectedUnit || null,
+      contactPhone: contactPhone.trim() || undefined
     })
 
-    setAttendeeName('')
-    setSelectedUnit('')
+    setIsSubmitting(false)
+
+    if (res.success && res.record) {
+      setStatusMessage({
+        type: 'success',
+        text: `Checked in successfully: ${res.record.attendeeName} (${isNonMember ? 'Visitor' : 'Member'}).`
+      })
+      setAttendeeName('')
+      setSelectedMemberId(null)
+      setContactPhone('')
+      setFilteredMembers([])
+    } else {
+      setStatusMessage({
+        type: 'error',
+        text: res.error || 'Check-in failed. Please try again.'
+      })
+    }
+  }
+
+  const handleRelease = async () => {
+    await attendanceService.releaseTerminal()
+    onReleaseTerminal()
   }
 
   return (
@@ -56,7 +157,7 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
           </div>
 
           <button
-            onClick={onReleaseTerminal}
+            onClick={handleRelease}
             className="inline-flex items-center px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition"
           >
             <LogOut className="w-3.5 h-3.5 mr-1.5 text-slate-400" />
@@ -83,9 +184,25 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
         )}
 
         <form onSubmit={handleSubmit} className="space-y-6">
-          <div>
+          <div className="flex items-center space-x-3 p-3.5 bg-slate-950/60 border border-slate-800/80 rounded-xl">
+            <input
+              id="non-member-toggle"
+              type="checkbox"
+              checked={isNonMember}
+              onChange={(e) => {
+                setIsNonMember(e.target.checked)
+                setSelectedMemberId(null)
+              }}
+              className="w-4 h-4 rounded border-slate-700 text-emerald-600 focus:ring-emerald-500 bg-slate-900"
+            />
+            <label htmlFor="non-member-toggle" className="text-sm font-medium text-slate-300 cursor-pointer">
+              Non-Member Visitor / Friend
+            </label>
+          </div>
+
+          <div className="relative">
             <label htmlFor="attendee-name" className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">
-              Full Name
+              {isNonMember ? 'Visitor Full Name' : 'Member Full Name'}
             </label>
             <div className="relative">
               <User className="w-5 h-5 absolute left-3.5 top-3.5 text-slate-500" />
@@ -93,24 +210,35 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
                 id="attendee-name"
                 type="text"
                 value={attendeeName}
-                onChange={(e) => setAttendeeName(e.target.value)}
-                placeholder="Enter attendee's full name"
-                className="w-full pl-11 pr-4 py-3 bg-slate-950 border border-slate-800 rounded-xl text-white placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition"
+                onChange={(e) => {
+                  setAttendeeName(e.target.value)
+                  setSelectedMemberId(null)
+                }}
+                placeholder={isNonMember ? 'e.g. Oluwaseun Adeleke' : 'Type name to search census...'}
+                className="w-full pl-11 pr-4 py-3 bg-slate-950 border border-slate-800 rounded-xl text-white placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm"
               />
             </div>
-          </div>
 
-          <div className="flex items-center space-x-3 p-3.5 bg-slate-950/60 border border-slate-800/80 rounded-xl">
-            <input
-              id="non-member-toggle"
-              type="checkbox"
-              checked={isNonMember}
-              onChange={(e) => setIsNonMember(e.target.checked)}
-              className="w-4 h-4 rounded border-slate-700 text-emerald-600 focus:ring-emerald-500 bg-slate-900"
-            />
-            <label htmlFor="non-member-toggle" className="text-sm font-medium text-slate-300 cursor-pointer">
-              Non-Member Visitor / Friend
-            </label>
+            {/* Member Census Auto-Suggestions */}
+            {!isNonMember && filteredMembers.length > 0 && (
+              <div className="absolute z-20 left-0 right-0 mt-1 bg-slate-950 border border-slate-800 rounded-xl overflow-hidden shadow-2xl">
+                {filteredMembers.map((m) => (
+                  <button
+                    key={m.id}
+                    type="button"
+                    onClick={() => handleSelectMember(m)}
+                    className="w-full px-4 py-2.5 text-left text-xs hover:bg-slate-800 flex items-center justify-between border-b border-slate-900 last:border-b-0"
+                  >
+                    <div className="flex items-center space-x-2">
+                      <UserCheck className="w-4 h-4 text-emerald-400" />
+                      <span className="font-semibold text-white">{m.fullName}</span>
+                      {m.preferredName && <span className="text-slate-400">({m.preferredName})</span>}
+                    </div>
+                    <span className="text-slate-500 text-[11px]">{m.homeUnitName || 'Unit'}</span>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
 
           <div>
@@ -123,27 +251,44 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
                 id="unit-select"
                 value={selectedUnit}
                 onChange={(e) => setSelectedUnit(e.target.value)}
-                className="w-full pl-11 pr-4 py-3 bg-slate-950 border border-slate-800 rounded-xl text-white focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition"
+                className="w-full pl-11 pr-4 py-3 bg-slate-950 border border-slate-800 rounded-xl text-white focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm"
               >
-                <option value="">Select Ward or Branch</option>
-                <option value="unit-pending-confirmation" disabled>
-                  Stake Units awaiting confirmation (Phase 2)
-                </option>
+                <option value="">{isNonMember ? 'None / Stake Wide' : 'Select Ward or Branch'}</option>
+                {units.map((u) => (
+                  <option key={u.id} value={u.id}>
+                    {u.unitName} ({u.unitType})
+                  </option>
+                ))}
               </select>
             </div>
-            {isNonMember && (
-              <p className="text-xs text-slate-400 mt-1.5">
-                Visitors can optionally indicate which ward or branch invited them.
-              </p>
-            )}
           </div>
+
+          {isNonMember && (
+            <div>
+              <label htmlFor="contact-phone" className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">
+                Contact Phone (Optional)
+              </label>
+              <div className="relative">
+                <Phone className="w-5 h-5 absolute left-3.5 top-3.5 text-slate-500" />
+                <input
+                  id="contact-phone"
+                  type="tel"
+                  value={contactPhone}
+                  onChange={(e) => setContactPhone(e.target.value)}
+                  placeholder="080 1234 5678"
+                  className="w-full pl-11 pr-4 py-3 bg-slate-950 border border-slate-800 rounded-xl text-white placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm"
+                />
+              </div>
+            </div>
+          )}
 
           <button
             type="submit"
-            className="w-full py-3.5 px-4 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold rounded-xl shadow-lg shadow-emerald-900/30 flex items-center justify-center space-x-2 transition"
+            disabled={isSubmitting}
+            className="w-full py-3.5 px-4 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold rounded-xl shadow-lg shadow-emerald-900/30 flex items-center justify-center space-x-2 transition disabled:opacity-50"
           >
             <CheckCircle2 className="w-5 h-5" />
-            <span>Mark Present</span>
+            <span>{isSubmitting ? 'Recording Attendance...' : 'Mark Present'}</span>
           </button>
         </form>
       </div>

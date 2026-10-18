@@ -51,7 +51,11 @@ export const AppContent: React.FC = () => {
   const [currentPath, setCurrentPath] = useState(() =>
     typeof window !== 'undefined' ? window.location.pathname : '/'
   )
-  const [activeTerminalCode, setActiveTerminalCode] = useState<string | null>(null)
+  const [activeTerminalCode, setActiveTerminalCode] = useState<string | null>(() =>
+    typeof window !== 'undefined' ? sessionStorage.getItem('ysaams_terminal_token') ? 'Active Kiosk' : null : null
+  )
+  const [terminalSessionTitle, setTerminalSessionTitle] = useState<string>('Active YSA Session')
+  const [terminalSessionDate, setTerminalSessionDate] = useState<string>('Today')
 
   useEffect(() => {
     const handlePopState = () => {
@@ -91,7 +95,8 @@ export const AppContent: React.FC = () => {
         <Navbar currentPath={currentPath} onNavigate={navigateTo} />
         <main className="flex-1">
           <TerminalView
-            sessionTitle={`Session ${activeTerminalCode || 'Terminal'}`}
+            sessionTitle={terminalSessionTitle}
+            sessionDate={terminalSessionDate}
             onReleaseTerminal={() => {
               setActiveTerminalCode(null)
               navigateTo('/')
@@ -111,8 +116,10 @@ export const AppContent: React.FC = () => {
       <main className="flex-1">
         <PublicAttendanceView
           initialCode={initialCode}
-          onCodeRedeemed={(code) => {
+          onCodeRedeemed={(code, title, date) => {
             setActiveTerminalCode(code)
+            if (title) setTerminalSessionTitle(title)
+            if (date) setTerminalSessionDate(date)
             // Atomically scrub code from URL to clean /terminal path
             navigateTo('/terminal')
           }}
