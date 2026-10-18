@@ -1,5 +1,5 @@
 import { supabase } from '../lib/supabase'
-import { AttendanceRecord, TerminalAuthorization } from '../types/database'
+import { AttendanceRecord, TerminalAuthorization, MemberRecord } from '../types/database'
 
 export interface SubmitAttendanceParams {
   sessionId: string
@@ -35,6 +35,8 @@ export interface ManualAttendanceParams {
 const STORAGE_KEY_TOKEN = 'ysaams_terminal_token'
 const STORAGE_KEY_SESSION_ID = 'ysaams_terminal_session_id'
 const STORAGE_KEY_TERMINAL_ID = 'ysaams_terminal_id'
+const STORAGE_KEY_SESSION_TITLE = 'ysaams_terminal_session_title'
+const STORAGE_KEY_SESSION_DATE = 'ysaams_terminal_session_date'
 
 class AttendanceService {
   private heartbeatIntervalId: number | null = null
@@ -48,6 +50,32 @@ class AttendanceService {
       return sessionStorage.getItem(STORAGE_KEY_TOKEN)
     } catch {
       return null
+    }
+  }
+
+  /**
+   * Retrieve stored session metadata for active kiosk restoration across page reloads.
+   */
+  getStoredSessionMetadata(): {
+    token: string | null
+    sessionId: string | null
+    terminalId: string | null
+    sessionTitle: string | null
+    sessionDate: string | null
+  } {
+    if (typeof window === 'undefined') {
+      return { token: null, sessionId: null, terminalId: null, sessionTitle: null, sessionDate: null }
+    }
+    try {
+      return {
+        token: sessionStorage.getItem(STORAGE_KEY_TOKEN),
+        sessionId: sessionStorage.getItem(STORAGE_KEY_SESSION_ID),
+        terminalId: sessionStorage.getItem(STORAGE_KEY_TERMINAL_ID),
+        sessionTitle: sessionStorage.getItem(STORAGE_KEY_SESSION_TITLE),
+        sessionDate: sessionStorage.getItem(STORAGE_KEY_SESSION_DATE)
+      }
+    } catch {
+      return { token: null, sessionId: null, terminalId: null, sessionTitle: null, sessionDate: null }
     }
   }
 
@@ -88,11 +116,17 @@ class AttendanceService {
         return { success: false, error: result?.error || 'Failed to authorize terminal' }
       }
 
-      // Persist bearer token in volatile sessionStorage (wiped when tab closes)
+      // Persist bearer token and session metadata in volatile sessionStorage (wiped when tab closes)
       if (typeof window !== 'undefined') {
         sessionStorage.setItem(STORAGE_KEY_TOKEN, result.terminal_token)
         sessionStorage.setItem(STORAGE_KEY_SESSION_ID, result.session_id)
         sessionStorage.setItem(STORAGE_KEY_TERMINAL_ID, result.terminal_id)
+        if (result.session_title) {
+          sessionStorage.setItem(STORAGE_KEY_SESSION_TITLE, result.session_title)
+        }
+        if (result.session_date) {
+          sessionStorage.setItem(STORAGE_KEY_SESSION_DATE, result.session_date)
+        }
       }
 
       // Start the heartbeat timer (every 4 minutes, since lease expires in 10 minutes)
@@ -155,14 +189,19 @@ class AttendanceService {
   /**
    * Starts periodic heartbeat every 4 minutes (240,000 ms).
    */
-  startHeartbeatLoop(token: string): void {
+  startHeartbeatLoop(token?: string, onLeaseRevoked?: () => void): void {
     this.stopHeartbeatLoop()
     if (typeof window === 'undefined') return
+    const activeToken = token || this.getStoredTerminalToken()
+    if (!activeToken) return
 
     this.heartbeatIntervalId = window.setInterval(async () => {
-      const alive = await this.heartbeatLease(token)
+      const alive = await this.heartbeatLease(activeToken)
       if (!alive) {
         this.stopHeartbeatLoop()
+        if (onLeaseRevoked) {
+          onLeaseRevoked()
+        }
       }
     }, 4 * 60 * 1000)
   }
@@ -206,8 +245,47 @@ class AttendanceService {
       sessionStorage.removeItem(STORAGE_KEY_TOKEN)
       sessionStorage.removeItem(STORAGE_KEY_SESSION_ID)
       sessionStorage.removeItem(STORAGE_KEY_TERMINAL_ID)
+      sessionStorage.removeItem(STORAGE_KEY_SESSION_TITLE)
+      sessionStorage.removeItem(STORAGE_KEY_SESSION_DATE)
     } catch {
       // Storage unavailable
+    }
+  }
+
+  /**
+   * Token-validated member lookup for authorized kiosks.
+   */
+  async searchTerminalMembers(
+    sessionId: string,
+    unitId?: string | null,
+    searchQuery?: string
+  ): Promise<MemberRecord[]> {
+    try {
+      const token = this.getStoredTerminalToken()
+      if (!token || !sessionId) return []
+
+      const { data, error } = await supabase.rpc('search_terminal_members', {
+        p_session_id: sessionId,
+        p_terminal_token: token,
+        p_unit_id: unitId || null,
+        p_search_query: (searchQuery || '').trim()
+      })
+
+      if (error || !Array.isArray(data)) {
+        return []
+      }
+
+      return data.map((m: any) => ({
+        id: m.id,
+        fullName: m.full_name,
+        preferredName: m.preferred_name,
+        homeUnitId: m.home_unit_id,
+        homeUnitName: m.home_unit_name,
+        isActive: true,
+        createdAt: m.created_at || ''
+      }))
+    } catch {
+      return []
     }
   }
 

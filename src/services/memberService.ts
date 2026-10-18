@@ -12,13 +12,19 @@ export interface CreateMemberParams {
 }
 
 export const memberService = {
-  async listMembers(unitIdFilter?: string | null): Promise<MemberRecord[]> {
+  async listMembers(unitIdFilter?: string | string[] | null): Promise<MemberRecord[]> {
+    if (Array.isArray(unitIdFilter) && unitIdFilter.length === 0) {
+      return []
+    }
+
     let query = supabase
       .from('members')
       .select('*, stake_units(unit_name)')
       .order('full_name', { ascending: true })
 
-    if (unitIdFilter) {
+    if (Array.isArray(unitIdFilter)) {
+      query = query.in('home_unit_id', unitIdFilter)
+    } else if (unitIdFilter) {
       query = query.eq('home_unit_id', unitIdFilter)
     }
 

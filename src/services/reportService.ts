@@ -1,4 +1,5 @@
 import { supabase } from '../lib/supabase'
+import { SessionVisitor } from '../types/database'
 
 export function calculateAttendancePercentage(
   attended: number,
@@ -8,6 +9,16 @@ export function calculateAttendancePercentage(
     return null
   }
   return Math.round((attended / eligibleOpportunities) * 1000) / 10
+}
+
+export function getMonthDateRange(year: number, month: number): { startDate: string; endDate: string } {
+  const safeMonth = Math.min(Math.max(1, Math.floor(month)), 12)
+  const lastDay = new Date(year, safeMonth, 0).getDate()
+  const monthStr = String(safeMonth).padStart(2, '0')
+  return {
+    startDate: `${year}-${monthStr}-01`,
+    endDate: `${year}-${monthStr}-${String(lastDay).padStart(2, '0')}`
+  }
 }
 
 export interface UnitMonthlyStat {
@@ -29,6 +40,7 @@ export interface IndividualAttendanceHistory {
 
 export const reportService = {
   calculateAttendancePercentage,
+  getMonthDateRange,
 
   async getStakeSummary(): Promise<{
     totalUnits: number
@@ -59,18 +71,27 @@ export const reportService = {
     }
   },
 
-  async getUnitMonthlyRegister(year: number, month: number, unitIdFilter?: string | null): Promise<UnitMonthlyStat[]> {
-    // 1. Fetch units
-    let unitQuery = supabase.from('stake_units').select('id, unit_name').eq('is_active', true)
-    if (unitIdFilter) {
+  async getUnitMonthlyRegister(
+    year: number,
+    month: number,
+    unitIdFilter?: string | string[] | null
+  ): Promise<UnitMonthlyStat[]> {
+    if (Array.isArray(unitIdFilter) && unitIdFilter.length === 0) {
+      return []
+    }
+
+    // 1. Fetch units in scope
+    let unitQuery = supabase.from('stake_units').select('id, unit_name').eq('is_active', true).order('unit_name', { ascending: true })
+    if (Array.isArray(unitIdFilter)) {
+      unitQuery = unitQuery.in('id', unitIdFilter)
+    } else if (unitIdFilter) {
       unitQuery = unitQuery.eq('id', unitIdFilter)
     }
     const { data: units } = await unitQuery
     if (!units || units.length === 0) return []
 
-    // 2. Fetch sessions in that month
-    const startDate = `${year}-${String(month).padStart(2, '0')}-01`
-    const endDate = `${year}-${String(month).padStart(2, '0')}-31`
+    // 2. Fetch sessions in that month using valid calendar end date
+    const { startDate, endDate } = getMonthDateRange(year, month)
 
     const { data: sessions } = await supabase
       .from('activity_sessions')
@@ -155,6 +176,53 @@ export const reportService = {
     }
   },
 
+  async listSessionVisitors(
+    unitIdFilter?: string | string[] | null
+  ): Promise<(SessionVisitor & { sessionTitle?: string; sessionDate?: string })[]> {
+    if (Array.isArray(unitIdFilter) && unitIdFilter.length === 0) {
+      return []
+    }
+
+    let query = supabase
+      .from('session_visitors')
+      .select('*, stake_units(unit_name), activity_sessions(session_title, session_date)')
+      .order('created_at', { ascending: false })
+
+    if (Array.isArray(unitIdFilter)) {
+      query = query.in('inviting_unit_id', unitIdFilter)
+    } else if (unitIdFilter) {
+      query = query.eq('inviting_unit_id', unitIdFilter)
+    }
+
+    const { data, error } = await query
+    if (error) throw new Error(error.message)
+
+    return (data || [])
+      .filter((v: any) => {
+        // Defense-in-depth visitor privacy: unit-scoped leaders only see visitors assigned to their units
+        if (Array.isArray(unitIdFilter)) {
+          return v.inviting_unit_id && unitIdFilter.includes(v.inviting_unit_id)
+        }
+        if (unitIdFilter) {
+          return v.inviting_unit_id === unitIdFilter
+        }
+        return true
+      })
+      .map((v: any) => ({
+        id: v.id,
+        sessionId: v.session_id,
+        fullName: v.full_name,
+        contactPhone: v.contact_phone,
+        isChurchMember: v.is_church_member,
+        invitingUnitId: v.inviting_unit_id,
+        invitingUnitName: v.stake_units?.unit_name || (v.inviting_unit_id ? 'Unit' : 'Unassigned / Stake-wide'),
+        recordedByTerminalId: v.recorded_by_terminal_id,
+        createdAt: v.created_at,
+        sessionTitle: v.activity_sessions?.session_title || 'Session',
+        sessionDate: v.activity_sessions?.session_date || ''
+      }))
+  },
+
   exportToCsv(data: Record<string, any>[], filename: string) {
     if (data.length === 0) return
     const headers = Object.keys(data[0])
@@ -175,3 +243,4 @@ export const reportService = {
     document.body.removeChild(link)
   }
 }
+

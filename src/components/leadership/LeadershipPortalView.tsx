@@ -8,6 +8,7 @@ import {
   Building2,
   UserCog,
   FileText,
+  Settings,
   Lock,
   ArrowRight,
   ShieldAlert,
@@ -16,16 +17,32 @@ import {
   UserCheck,
   Plus,
   Download,
-  Shield
+  Shield,
+  Printer,
+  Copy,
+  X
 } from 'lucide-react'
 import { useAuth } from '../../context/AuthContext'
-import { LeadershipRoute, StakeUnit, UserProfile, MemberRecord, ActivityDefinition, ActivitySession, AppRole } from '../../types/database'
+import {
+  LeadershipRoute,
+  StakeUnit,
+  UserProfile,
+  MemberRecord,
+  ActivityDefinition,
+  ActivitySession,
+  AppRole,
+  SessionVisitor
+} from '../../types/database'
 import { authService } from '../../services/authService'
 import { adminService } from '../../services/adminService'
 import { memberService } from '../../services/memberService'
 import { activityService } from '../../services/activityService'
 import { attendanceService } from '../../services/attendanceService'
-import { reportService, UnitMonthlyStat } from '../../services/reportService'
+import {
+  reportService,
+  UnitMonthlyStat,
+  IndividualAttendanceHistory
+} from '../../services/reportService'
 
 interface LeadershipPortalViewProps {
   currentSubpath: LeadershipRoute
@@ -36,13 +53,22 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
   currentSubpath,
   onNavigateSubpath
 }) => {
-  const { isAuthenticated, user, hasRole } = useAuth()
+  const {
+    isAuthenticated,
+    user,
+    isSystemAdmin,
+    isStakeLeader,
+    canManageActivities,
+    assignedUnitIds
+  } = useAuth()
 
-  // Sign In State
+  // Sign In & Recovery State
   const [loginEmail, setLoginEmail] = useState('')
   const [loginPassword, setLoginPassword] = useState('')
   const [loginError, setLoginError] = useState<string | null>(null)
+  const [loginNotice, setLoginNotice] = useState<string | null>(null)
   const [isLoggingIn, setIsLoggingIn] = useState(false)
+  const [isResetMode, setIsResetMode] = useState(false)
 
   // Common Data State
   const [units, setUnits] = useState<StakeUnit[]>([])
@@ -53,6 +79,13 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
   const [auditLogs, setAuditLogs] = useState<any[]>([])
   const [stakeSummary, setStakeSummary] = useState<any>(null)
   const [unitMonthlyStats, setUnitMonthlyStats] = useState<UnitMonthlyStat[]>([])
+  const [visitorsList, setVisitorsList] = useState<(SessionVisitor & { sessionTitle?: string; sessionDate?: string })[]>([])
+
+  // Reports Filter & Individual Lookup State
+  const [reportYear, setReportYear] = useState(() => new Date().getFullYear())
+  const [reportMonth, setReportMonth] = useState(() => new Date().getMonth() + 1)
+  const [selectedHistoryMemberId, setSelectedHistoryMemberId] = useState('')
+  const [memberHistory, setMemberHistory] = useState<IndividualAttendanceHistory | null>(null)
 
   // Action / Form States
   const [statusMsg, setStatusMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
@@ -93,26 +126,26 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
   const [newSessDate, setNewSessDate] = useState(() => new Date().toISOString().split('T')[0])
   const [newSessStartTime, setNewSessStartTime] = useState('16:00')
   const [newSessMaxTerminals, setNewSessMaxTerminals] = useState(2)
+  const [newSessVisitorEnabled, setNewSessVisitorEnabled] = useState(true)
+  const [newSessSelectedUnits, setNewSessSelectedUnits] = useState<string[]>([])
 
-  // 7. Initiate Session Modal/State
+  // 7. Initiate & Reopen Session State
+  const [activeSessionCodes, setActiveSessionCodes] = useState<Record<string, string>>({})
   const [reopenReason, setReopenReason] = useState('')
   const [reopenSessionId, setReopenSessionId] = useState('')
 
-  // Scoped unit access check for Ward/Branch leaders
-  const isStakeLeader = user ? hasRole('system_admin') || hasRole('stake_presidency') : false
-  const userAssignedUnitId = user?.unitAssignments?.[0]?.unitId || null
+  const unitFilter: string[] | null = isStakeLeader ? null : assignedUnitIds
 
   const loadCurrentSubpathData = async () => {
     if (!isAuthenticated) return
     setIsLoadingData(true)
-    setStatusMsg(null)
     try {
-      const unitFilter = isStakeLeader ? null : userAssignedUnitId
-
       if (currentSubpath === 'dashboard') {
-        const sum = await reportService.getStakeSummary()
+        const [sum, sList] = await Promise.all([
+          reportService.getStakeSummary(),
+          activityService.listSessions()
+        ])
         setStakeSummary(sum)
-        const sList = await activityService.listSessions()
         setSessions(sList.slice(0, 5))
       } else if (currentSubpath === 'units') {
         const uList = await adminService.listUnits()
@@ -124,6 +157,9 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
         ])
         setUnits(uList)
         setMembers(mList)
+        if (!isStakeLeader && assignedUnitIds.length === 1 && !newMemberUnitId) {
+          setNewMemberUnitId(assignedUnitIds[0])
+        }
       } else if (currentSubpath === 'activities') {
         const [uList, aList, sList] = await Promise.all([
           adminService.listUnits(),
@@ -138,26 +174,35 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
           activityService.listSessions(),
           memberService.listMembers(unitFilter)
         ])
-        setSessions(sList.filter(s => s.status === 'active'))
-        setMembers(mList)
-        if (sList.length > 0 && !manualSessionId) {
-          const firstActive = sList.find(s => s.status === 'active')
-          if (firstActive) setManualSessionId(firstActive.id)
+        const activeSessions = sList.filter(s => s.status === 'active')
+        setSessions(activeSessions)
+        setMembers(mList.filter(m => m.isActive))
+        if (activeSessions.length > 0 && !manualSessionId) {
+          setManualSessionId(activeSessions[0].id)
         }
       } else if (currentSubpath === 'reports') {
-        const now = new Date()
-        const stats = await reportService.getUnitMonthlyRegister(now.getFullYear(), now.getMonth() + 1, unitFilter)
-        setUnitMonthlyStats(stats)
-      } else if (currentSubpath === 'users') {
-        const [uList, userProfiles] = await Promise.all([
-          adminService.listUnits(),
-          adminService.listUsers()
+        const [stats, mList, vList] = await Promise.all([
+          reportService.getUnitMonthlyRegister(reportYear, reportMonth, unitFilter),
+          memberService.listMembers(unitFilter),
+          reportService.listSessionVisitors(unitFilter)
         ])
-        setUnits(uList)
-        setUsersList(userProfiles)
+        setUnitMonthlyStats(stats)
+        setMembers(mList)
+        setVisitorsList(vList)
+      } else if (currentSubpath === 'users') {
+        if (isStakeLeader) {
+          const [uList, userProfiles] = await Promise.all([
+            adminService.listUnits(),
+            adminService.listUsers()
+          ])
+          setUnits(uList)
+          setUsersList(userProfiles)
+        }
       } else if (currentSubpath === 'audit-logs') {
-        const logs = await adminService.listAuditLogs(100)
-        setAuditLogs(logs)
+        if (isStakeLeader) {
+          const logs = await adminService.listAuditLogs(100)
+          setAuditLogs(logs)
+        }
       }
     } catch (err: any) {
       setStatusMsg({ type: 'error', text: err?.message || 'Failed to load module data' })
@@ -167,19 +212,38 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
   }
 
   useEffect(() => {
+    setStatusMsg(null)
     loadCurrentSubpathData()
-  }, [currentSubpath, isAuthenticated])
+  }, [currentSubpath, isAuthenticated, reportYear, reportMonth])
 
   const handleSignIn = async (e: React.FormEvent) => {
     e.preventDefault()
+    setLoginError(null)
+    setLoginNotice(null)
+
+    if (isResetMode) {
+      if (!loginEmail.trim()) {
+        setLoginError('Please enter your leadership email address to receive a recovery link.')
+        return
+      }
+      setIsLoggingIn(true)
+      const resetRes = await authService.resetPasswordForEmail(loginEmail)
+      setIsLoggingIn(false)
+      if (resetRes.success) {
+        setLoginNotice('Password recovery instructions have been sent to your email address.')
+        setIsResetMode(false)
+      } else {
+        setLoginError(resetRes.error || 'Failed to send password reset email.')
+      }
+      return
+    }
+
     if (!loginEmail.trim() || !loginPassword) {
       setLoginError('Email and password are required.')
       return
     }
 
     setIsLoggingIn(true)
-    setLoginError(null)
-
     const res = await authService.signInWithPassword(loginEmail, loginPassword)
     setIsLoggingIn(false)
 
@@ -210,18 +274,26 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
           </div>
 
           {loginError && (
-            <div className="mb-4 p-3 bg-red-950/70 border border-red-800 rounded-xl text-xs text-red-200 flex items-center space-x-2">
+            <div className="mb-4 p-3 bg-red-950/70 border border-red-800 rounded-xl text-xs text-red-200 flex items-center space-x-2" role="alert">
               <AlertCircle className="w-4 h-4 text-red-400 flex-shrink-0" />
               <span>{loginError}</span>
             </div>
           )}
 
+          {loginNotice && (
+            <div className="mb-4 p-3 bg-emerald-950/70 border border-emerald-800 rounded-xl text-xs text-emerald-200 flex items-center space-x-2" role="status">
+              <CheckCircle2 className="w-4 h-4 text-emerald-400 flex-shrink-0" />
+              <span>{loginNotice}</span>
+            </div>
+          )}
+
           <form onSubmit={handleSignIn} className="space-y-4">
             <div>
-              <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">
+              <label htmlFor="leader-email" className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">
                 Leader Email
               </label>
               <input
+                id="leader-email"
                 type="email"
                 value={loginEmail}
                 onChange={(e) => setLoginEmail(e.target.value)}
@@ -231,28 +303,51 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
               />
             </div>
 
-            <div>
-              <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">
-                Password
-              </label>
-              <input
-                type="password"
-                value={loginPassword}
-                onChange={(e) => setLoginPassword(e.target.value)}
-                placeholder="••••••••••••"
-                required
-                className="w-full px-4 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm"
-              />
-            </div>
+            {!isResetMode && (
+              <div>
+                <label htmlFor="leader-password" className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">
+                  Password
+                </label>
+                <input
+                  id="leader-password"
+                  type="password"
+                  value={loginPassword}
+                  onChange={(e) => setLoginPassword(e.target.value)}
+                  placeholder="••••••••••••"
+                  required
+                  className="w-full px-4 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm"
+                />
+              </div>
+            )}
 
             <button
               type="submit"
               disabled={isLoggingIn}
               className="w-full py-3 px-4 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold rounded-xl shadow-lg shadow-emerald-900/30 flex items-center justify-center space-x-2 transition text-sm disabled:opacity-50"
             >
-              <span>{isLoggingIn ? 'Authenticating...' : 'Sign In to Portal'}</span>
+              <span>
+                {isLoggingIn
+                  ? 'Processing...'
+                  : isResetMode
+                  ? 'Send Recovery Link'
+                  : 'Sign In to Portal'}
+              </span>
               <ArrowRight className="w-4 h-4" />
             </button>
+
+            <div className="text-center pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsResetMode(!isResetMode)
+                  setLoginError(null)
+                  setLoginNotice(null)
+                }}
+                className="text-xs text-slate-400 hover:text-emerald-400 transition"
+              >
+                {isResetMode ? 'Return to Password Sign In' : 'Forgot password? Request recovery link'}
+              </button>
+            </div>
           </form>
         </div>
       </div>
@@ -267,20 +362,54 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
     { id: 'reports', label: 'Reports & Export', icon: BarChart3 },
     { id: 'units', label: 'Stake Units', icon: Building2 },
     { id: 'users', label: 'User Governance', icon: UserCog },
-    { id: 'audit-logs', label: 'Audit Trail', icon: FileText }
+    { id: 'audit-logs', label: 'Audit Trail', icon: FileText },
+    { id: 'settings', label: 'Settings', icon: Settings }
   ]
+
+  // Scoped units available when registering members
+  const memberCreatableUnits = isStakeLeader
+    ? units.filter(u => u.isActive)
+    : units.filter(u => u.isActive && assignedUnitIds.includes(u.id))
+
+  // Scoped members eligible for the currently selected manual check-in session
+  const selectedManualSession = sessions.find(s => s.id === manualSessionId)
+  const eligibleManualMembers = members.filter(m => {
+    if (!m.isActive) return false
+    if (
+      selectedManualSession?.participatingUnits &&
+      selectedManualSession.participatingUnits.length > 0
+    ) {
+      return selectedManualSession.participatingUnits.includes(m.homeUnitId)
+    }
+    return true
+  })
 
   // Handlers for modules
   const handleCreateUnit = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!newUnitName.trim()) return
+    if (!isSystemAdmin || !newUnitName.trim()) return
     try {
-      await adminService.createUnit(newUnitName, newUnitType)
+      const createdName = newUnitName.trim()
+      await adminService.createUnit(createdName, newUnitType)
       setNewUnitName('')
-      setStatusMsg({ type: 'success', text: `Unit "${newUnitName.trim()}" successfully created.` })
-      loadCurrentSubpathData()
+      await loadCurrentSubpathData()
+      setStatusMsg({ type: 'success', text: `Unit "${createdName}" successfully created.` })
     } catch (err: any) {
       setStatusMsg({ type: 'error', text: err?.message || 'Failed to create unit' })
+    }
+  }
+
+  const handleToggleUnitStatus = async (unit: StakeUnit) => {
+    if (!isSystemAdmin) return
+    try {
+      await adminService.toggleUnitActive(unit.id, !unit.isActive)
+      await loadCurrentSubpathData()
+      setStatusMsg({
+        type: 'success',
+        text: `Unit "${unit.unitName}" ${!unit.isActive ? 'activated' : 'deactivated'}.`
+      })
+    } catch (err: any) {
+      setStatusMsg({ type: 'error', text: err?.message || 'Failed to update unit status' })
     }
   }
 
@@ -288,6 +417,10 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
     e.preventDefault()
     if (!newMemberName.trim() || !newMemberUnitId) {
       setStatusMsg({ type: 'error', text: 'Full name and home unit are required.' })
+      return
+    }
+    if (!isStakeLeader && !assignedUnitIds.includes(newMemberUnitId)) {
+      setStatusMsg({ type: 'error', text: 'Unauthorized: You can only register members into your assigned ward or branch.' })
       return
     }
     try {
@@ -305,8 +438,8 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
       setNewMemberPhone('')
       setNewMemberEmail('')
       setNewMemberNumber('')
-      setStatusMsg({ type: 'success', text: `Member record created.` })
-      loadCurrentSubpathData()
+      await loadCurrentSubpathData()
+      setStatusMsg({ type: 'success', text: 'Member record registered in census.' })
     } catch (err: any) {
       setStatusMsg({ type: 'error', text: err?.message || 'Failed to register member' })
     }
@@ -314,17 +447,20 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
 
   const handleCreateActivity = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!newActTitle.trim()) return
+    if (!canManageActivities || !newActTitle.trim()) return
     try {
-      await activityService.createActivity({
-        title: newActTitle,
-        category: newActCategory,
-        description: newActDesc
-      }, user!.id)
+      await activityService.createActivity(
+        {
+          title: newActTitle,
+          category: newActCategory,
+          description: newActDesc
+        },
+        user!.id
+      )
       setNewActTitle('')
       setNewActDesc('')
+      await loadCurrentSubpathData()
       setStatusMsg({ type: 'success', text: 'Activity definition created.' })
-      loadCurrentSubpathData()
     } catch (err: any) {
       setStatusMsg({ type: 'error', text: err?.message || 'Failed to create activity' })
     }
@@ -332,56 +468,74 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
 
   const handleCreateSession = async (e: React.FormEvent) => {
     e.preventDefault()
+    if (!canManageActivities) return
     if (!newSessActivityId || !newSessTitle.trim()) {
       setStatusMsg({ type: 'error', text: 'Activity and session title are required.' })
       return
     }
     try {
+      const clampedTerminals = Math.min(Math.max(1, Number(newSessMaxTerminals) || 2), 10)
       await activityService.createSession({
         activityId: newSessActivityId,
         sessionTitle: newSessTitle,
         sessionDate: newSessDate,
         startTime: newSessStartTime,
-        maxTerminals: Number(newSessMaxTerminals) || 2
+        maxTerminals: clampedTerminals,
+        visitorRegistrationEnabled: newSessVisitorEnabled,
+        participatingUnits: newSessSelectedUnits.length > 0 ? newSessSelectedUnits : null
       })
       setNewSessTitle('')
+      setNewSessSelectedUnits([])
+      await loadCurrentSubpathData()
       setStatusMsg({ type: 'success', text: 'New activity session scheduled.' })
-      loadCurrentSubpathData()
     } catch (err: any) {
       setStatusMsg({ type: 'error', text: err?.message || 'Failed to schedule session' })
     }
   }
 
-  const handleInitiateSession = async (sessionId: string) => {
+  const handleInitiateSession = async (session: ActivitySession) => {
+    if (!canManageActivities) return
     const code = activityService.generateCode()
+    const maxTerminals = Math.min(Math.max(1, session.maxTerminals || 2), 10)
     try {
-      const res = await activityService.initiateSession(sessionId, code, 2)
+      const res = await activityService.initiateSession(session.id, code, maxTerminals)
       if (res.success) {
-        setStatusMsg({ type: 'success', text: `Session activated with attendance code: ${code}` })
-        loadCurrentSubpathData()
+        setActiveSessionCodes(prev => ({ ...prev, [session.id]: code }))
+        await loadCurrentSubpathData()
+        setStatusMsg({
+          type: 'success',
+          text: `Session "${session.sessionTitle}" activated with 6-character code: ${code} (Max terminals: ${maxTerminals})`
+        })
       } else {
         setStatusMsg({ type: 'error', text: res.error || 'Failed to initiate session' })
       }
     } catch (err: any) {
-      setStatusMsg({ type: 'error', text: err?.message || 'Failed to initiate' })
+      setStatusMsg({ type: 'error', text: err?.message || 'Failed to initiate session' })
     }
   }
 
   const handleCloseSession = async (sessionId: string) => {
+    if (!canManageActivities) return
     try {
       const res = await activityService.closeSession(sessionId)
       if (res.success) {
+        setActiveSessionCodes(prev => {
+          const next = { ...prev }
+          delete next[sessionId]
+          return next
+        })
+        await loadCurrentSubpathData()
         setStatusMsg({ type: 'success', text: 'Session closed and active terminal leases revoked.' })
-        loadCurrentSubpathData()
       } else {
         setStatusMsg({ type: 'error', text: res.error || 'Failed to close session' })
       }
     } catch (err: any) {
-      setStatusMsg({ type: 'error', text: err?.message || 'Failed to close' })
+      setStatusMsg({ type: 'error', text: err?.message || 'Failed to close session' })
     }
   }
 
   const handleReopenSession = async (sessionId: string) => {
+    if (!isStakeLeader) return
     if (!reopenReason.trim() || reopenReason.trim().length < 5) {
       setStatusMsg({ type: 'error', text: 'A justification reason of at least 5 characters is required to reopen a closed session.' })
       return
@@ -389,15 +543,15 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
     try {
       const res = await activityService.reopenSession(sessionId, reopenReason)
       if (res.success) {
-        setStatusMsg({ type: 'success', text: 'Session reopened successfully.' })
         setReopenSessionId('')
         setReopenReason('')
-        loadCurrentSubpathData()
+        await loadCurrentSubpathData()
+        setStatusMsg({ type: 'success', text: 'Session reopened and audited successfully.' })
       } else {
-        setStatusMsg({ type: 'error', text: res.error || 'Failed to reopen' })
+        setStatusMsg({ type: 'error', text: res.error || 'Failed to reopen session' })
       }
     } catch (err: any) {
-      setStatusMsg({ type: 'error', text: err?.message || 'Failed to reopen' })
+      setStatusMsg({ type: 'error', text: err?.message || 'Failed to reopen session' })
     }
   }
 
@@ -427,6 +581,20 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
         type: 'error',
         text: result.error || 'Failed to record manual check-in.'
       })
+    }
+  }
+
+  const handleLoadMemberHistory = async (memberId: string) => {
+    setSelectedHistoryMemberId(memberId)
+    if (!memberId) {
+      setMemberHistory(null)
+      return
+    }
+    try {
+      const history = await reportService.getIndividualHistory(memberId)
+      setMemberHistory(history)
+    } catch (err: any) {
+      setStatusMsg({ type: 'error', text: err?.message || 'Failed to load individual member history' })
     }
   }
 
@@ -470,7 +638,9 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
             <span>Scoped User:</span>
             <span className="font-semibold text-slate-200">{user?.fullName || 'Stake Leader'}</span>
             <span className="text-[11px] px-2 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-800">
-              {isStakeLeader ? 'Stake Wide' : user?.unitAssignments?.[0]?.unitName || 'Unit Assigned'}
+              {isStakeLeader
+                ? 'Stake Wide'
+                : (user?.unitAssignments || []).map(ua => ua.unitName).filter(Boolean).join(', ') || 'Unit Assigned'}
             </span>
           </div>
         </div>
@@ -478,19 +648,29 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
         {/* Status Alerts */}
         {statusMsg && (
           <div
-            className={`mb-6 p-4 rounded-xl flex items-center space-x-3 text-xs border ${
+            className={`mb-6 p-4 rounded-xl flex items-center justify-between text-xs border ${
               statusMsg.type === 'success'
                 ? 'bg-emerald-950/60 border-emerald-800/60 text-emerald-200'
                 : 'bg-red-950/60 border-red-800/60 text-red-200'
             }`}
             role="status"
           >
-            {statusMsg.type === 'success' ? (
-              <CheckCircle2 className="w-4 h-4 flex-shrink-0 text-emerald-400" />
-            ) : (
-              <AlertCircle className="w-4 h-4 flex-shrink-0 text-red-400" />
-            )}
-            <span>{statusMsg.text}</span>
+            <div className="flex items-center space-x-3">
+              {statusMsg.type === 'success' ? (
+                <CheckCircle2 className="w-4 h-4 flex-shrink-0 text-emerald-400" />
+              ) : (
+                <AlertCircle className="w-4 h-4 flex-shrink-0 text-red-400" />
+              )}
+              <span>{statusMsg.text}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setStatusMsg(null)}
+              className="text-slate-400 hover:text-white ml-3"
+              aria-label="Dismiss alert"
+            >
+              <X className="w-4 h-4" />
+            </button>
           </div>
         )}
 
@@ -499,11 +679,11 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
           <div className="space-y-6">
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
               <div className="p-4 bg-slate-950 border border-slate-800 rounded-xl">
-                <p className="text-xs text-slate-400">Total Units</p>
+                <p className="text-xs text-slate-400">Active Stake Units</p>
                 <p className="text-2xl font-bold text-white mt-1">{stakeSummary?.totalUnits ?? '-'}</p>
               </div>
               <div className="p-4 bg-slate-950 border border-slate-800 rounded-xl">
-                <p className="text-xs text-slate-400">Active Members</p>
+                <p className="text-xs text-slate-400">Scoped Active Members</p>
                 <p className="text-2xl font-bold text-white mt-1">{stakeSummary?.totalMembers ?? '-'}</p>
               </div>
               <div className="p-4 bg-slate-950 border border-slate-800 rounded-xl">
@@ -515,7 +695,7 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
                 <p className="text-2xl font-bold text-white mt-1">{stakeSummary?.totalSessions ?? '-'}</p>
               </div>
               <div className="p-4 bg-slate-950 border border-slate-800 rounded-xl">
-                <p className="text-xs text-slate-400">Total Check-Ins</p>
+                <p className="text-xs text-slate-400">Scoped Check-Ins</p>
                 <p className="text-2xl font-bold text-emerald-400 mt-1">{stakeSummary?.totalCheckIns ?? '-'}</p>
               </div>
             </div>
@@ -562,7 +742,7 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
         {/* 2. UNITS MANAGEMENT VIEW */}
         {currentSubpath === 'units' && (
           <div className="space-y-6">
-            {isStakeLeader && (
+            {isSystemAdmin ? (
               <form onSubmit={handleCreateUnit} className="bg-slate-950 border border-slate-800 p-4 rounded-xl flex flex-wrap gap-3 items-end">
                 <div className="flex-1 min-w-[200px]">
                   <label className="block text-[11px] font-semibold text-slate-300 uppercase mb-1">Unit Name</label>
@@ -570,7 +750,7 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
                     type="text"
                     value={newUnitName}
                     onChange={(e) => setNewUnitName(e.target.value)}
-                    placeholder="e.g. Obantoko 1st Ward"
+                    placeholder="Enter official ward or branch name"
                     className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-lg text-xs text-white"
                   />
                 </div>
@@ -593,6 +773,10 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
                   <span>Add Stake Unit</span>
                 </button>
               </form>
+            ) : (
+              <div className="p-3.5 bg-slate-950 border border-slate-800 rounded-xl text-xs text-slate-400">
+                Viewing official stake units. Creating or deactivating stake units requires Stake System Administrator (`system_admin`) authority.
+              </div>
             )}
 
             <div className="bg-slate-950 border border-slate-800 rounded-xl overflow-hidden">
@@ -602,7 +786,7 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
                     <th className="px-4 py-3">Unit Name</th>
                     <th className="px-4 py-3">Type</th>
                     <th className="px-4 py-3">Status</th>
-                    {isStakeLeader && <th className="px-4 py-3 text-right">Actions</th>}
+                    {isSystemAdmin && <th className="px-4 py-3 text-right">Actions</th>}
                   </tr>
                 </thead>
                 <tbody>
@@ -615,13 +799,10 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
                           {u.isActive ? 'Active' : 'Inactive'}
                         </span>
                       </td>
-                      {isStakeLeader && (
+                      {isSystemAdmin && (
                         <td className="px-4 py-3 text-right">
                           <button
-                            onClick={async () => {
-                              await adminService.toggleUnitActive(u.id, !u.isActive)
-                              loadCurrentSubpathData()
-                            }}
+                            onClick={() => handleToggleUnitStatus(u)}
                             className="text-[11px] text-slate-400 hover:text-white"
                           >
                             {u.isActive ? 'Deactivate' : 'Activate'}
@@ -644,111 +825,159 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
         {/* 3. ACTIVITIES & SESSIONS VIEW */}
         {currentSubpath === 'activities' && (
           <div className="space-y-8">
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              {/* Activity Definition Form */}
-              <form onSubmit={handleCreateActivity} className="bg-slate-950 border border-slate-800 p-4 rounded-xl space-y-3">
-                <h3 className="text-xs font-bold text-white uppercase tracking-wider">Create Activity Template</h3>
-                <div>
-                  <label className="block text-[11px] text-slate-300 uppercase mb-1">Title</label>
-                  <input
-                    type="text"
-                    value={newActTitle}
-                    onChange={(e) => setNewActTitle(e.target.value)}
-                    placeholder="e.g. Stake YSA Institute Night"
-                    className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-lg text-xs text-white"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[11px] text-slate-300 uppercase mb-1">Category</label>
-                  <select
-                    value={newActCategory}
-                    onChange={(e) => setNewActCategory(e.target.value as any)}
-                    className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-lg text-xs text-white"
-                  >
-                    <option value="spiritual">Spiritual</option>
-                    <option value="social">Social</option>
-                    <option value="service">Service</option>
-                    <option value="sports">Sports</option>
-                    <option value="temple">Temple</option>
-                    <option value="educational">Educational</option>
-                    <option value="other">Other</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-[11px] text-slate-300 uppercase mb-1">Description</label>
-                  <input
-                    type="text"
-                    value={newActDesc}
-                    onChange={(e) => setNewActDesc(e.target.value)}
-                    placeholder="Optional notes or objectives"
-                    className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-lg text-xs text-white"
-                  />
-                </div>
-                <button type="submit" className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold">
-                  Save Activity
-                </button>
-              </form>
+            {canManageActivities ? (
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                {/* Activity Definition Form */}
+                <form onSubmit={handleCreateActivity} className="bg-slate-950 border border-slate-800 p-4 rounded-xl space-y-3">
+                  <h3 className="text-xs font-bold text-white uppercase tracking-wider">Create Activity Template</h3>
+                  <div>
+                    <label className="block text-[11px] text-slate-300 uppercase mb-1">Title</label>
+                    <input
+                      type="text"
+                      value={newActTitle}
+                      onChange={(e) => setNewActTitle(e.target.value)}
+                      placeholder="e.g. Stake YSA Institute Night"
+                      className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-lg text-xs text-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] text-slate-300 uppercase mb-1">Category</label>
+                    <select
+                      value={newActCategory}
+                      onChange={(e) => setNewActCategory(e.target.value as any)}
+                      className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-lg text-xs text-white"
+                    >
+                      <option value="spiritual">Spiritual</option>
+                      <option value="social">Social</option>
+                      <option value="service">Service</option>
+                      <option value="sports">Sports</option>
+                      <option value="temple">Temple</option>
+                      <option value="educational">Educational</option>
+                      <option value="other">Other</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-[11px] text-slate-300 uppercase mb-1">Description</label>
+                    <input
+                      type="text"
+                      value={newActDesc}
+                      onChange={(e) => setNewActDesc(e.target.value)}
+                      placeholder="Optional notes or objectives"
+                      className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-lg text-xs text-white"
+                    />
+                  </div>
+                  <button type="submit" className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold">
+                    Save Activity
+                  </button>
+                </form>
 
-              {/* Schedule Session Form */}
-              <form onSubmit={handleCreateSession} className="bg-slate-950 border border-slate-800 p-4 rounded-xl space-y-3">
-                <h3 className="text-xs font-bold text-white uppercase tracking-wider">Schedule Live Session</h3>
-                <div>
-                  <label className="block text-[11px] text-slate-300 uppercase mb-1">Activity</label>
-                  <select
-                    value={newSessActivityId}
-                    onChange={(e) => setNewSessActivityId(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-lg text-xs text-white"
-                  >
-                    <option value="">Select Activity</option>
-                    {activities.map(a => <option key={a.id} value={a.id}>{a.title} ({a.category})</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-[11px] text-slate-300 uppercase mb-1">Session Title</label>
-                  <input
-                    type="text"
-                    value={newSessTitle}
-                    onChange={(e) => setNewSessTitle(e.target.value)}
-                    placeholder="e.g. Obantoko Stake YSA Gathering"
-                    className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-lg text-xs text-white"
-                  />
-                </div>
-                <div className="grid grid-cols-3 gap-2">
+                {/* Schedule Session Form */}
+                <form onSubmit={handleCreateSession} className="bg-slate-950 border border-slate-800 p-4 rounded-xl space-y-3">
+                  <h3 className="text-xs font-bold text-white uppercase tracking-wider">Schedule Live Session</h3>
                   <div>
-                    <label className="block text-[11px] text-slate-300 uppercase mb-1">Date</label>
+                    <label className="block text-[11px] text-slate-300 uppercase mb-1">Activity</label>
+                    <select
+                      value={newSessActivityId}
+                      onChange={(e) => setNewSessActivityId(e.target.value)}
+                      className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-lg text-xs text-white"
+                    >
+                      <option value="">Select Activity</option>
+                      {activities.map(a => <option key={a.id} value={a.id}>{a.title} ({a.category})</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-[11px] text-slate-300 uppercase mb-1">Session Title</label>
                     <input
-                      type="date"
-                      value={newSessDate}
-                      onChange={(e) => setNewSessDate(e.target.value)}
+                      type="text"
+                      value={newSessTitle}
+                      onChange={(e) => setNewSessTitle(e.target.value)}
+                      placeholder="e.g. Obantoko Stake YSA Gathering"
                       className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-lg text-xs text-white"
                     />
                   </div>
-                  <div>
-                    <label className="block text-[11px] text-slate-300 uppercase mb-1">Start Time</label>
-                    <input
-                      type="time"
-                      value={newSessStartTime}
-                      onChange={(e) => setNewSessStartTime(e.target.value)}
-                      className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-lg text-xs text-white"
-                    />
+                  <div className="grid grid-cols-3 gap-2">
+                    <div>
+                      <label className="block text-[11px] text-slate-300 uppercase mb-1">Date</label>
+                      <input
+                        type="date"
+                        value={newSessDate}
+                        onChange={(e) => setNewSessDate(e.target.value)}
+                        className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-lg text-xs text-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] text-slate-300 uppercase mb-1">Start Time</label>
+                      <input
+                        type="time"
+                        value={newSessStartTime}
+                        onChange={(e) => setNewSessStartTime(e.target.value)}
+                        className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-lg text-xs text-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] text-slate-300 uppercase mb-1">Max Terminals</label>
+                      <input
+                        type="number"
+                        min={1}
+                        max={10}
+                        value={newSessMaxTerminals}
+                        onChange={(e) => setNewSessMaxTerminals(Number(e.target.value))}
+                        className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-lg text-xs text-white"
+                      />
+                    </div>
                   </div>
-                  <div>
-                    <label className="block text-[11px] text-slate-300 uppercase mb-1">Max Terminals</label>
-                    <input
-                      type="number"
-                      min={1}
-                      max={10}
-                      value={newSessMaxTerminals}
-                      onChange={(e) => setNewSessMaxTerminals(Number(e.target.value))}
-                      className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-lg text-xs text-white"
-                    />
+
+                  {units.length > 0 && (
+                    <div>
+                      <label className="block text-[11px] text-slate-300 uppercase mb-1">
+                        Participating Units (Leave unchecked for Stake-Wide)
+                      </label>
+                      <div className="flex flex-wrap gap-2 max-h-24 overflow-y-auto p-2 bg-slate-900 border border-slate-800 rounded-lg">
+                        {units.filter(u => u.isActive).map(u => {
+                          const checked = newSessSelectedUnits.includes(u.id)
+                          return (
+                            <label key={u.id} className="inline-flex items-center space-x-1.5 text-[11px] text-slate-300 cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={(e) => {
+                                  if (e.target.checked) {
+                                    setNewSessSelectedUnits(prev => [...prev, u.id])
+                                  } else {
+                                    setNewSessSelectedUnits(prev => prev.filter(id => id !== u.id))
+                                  }
+                                }}
+                                className="rounded border-slate-700 bg-slate-950 text-emerald-600"
+                              />
+                              <span>{u.unitName}</span>
+                            </label>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="flex items-center justify-between pt-1">
+                    <label className="inline-flex items-center space-x-2 text-xs text-slate-300 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={newSessVisitorEnabled}
+                        onChange={(e) => setNewSessVisitorEnabled(e.target.checked)}
+                        className="rounded border-slate-700 bg-slate-900 text-emerald-600"
+                      />
+                      <span>Allow Non-Member Visitor Check-In</span>
+                    </label>
+                    <button type="submit" className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold">
+                      Schedule Session
+                    </button>
                   </div>
-                </div>
-                <button type="submit" className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold">
-                  Schedule Session
-                </button>
-              </form>
-            </div>
+                </form>
+              </div>
+            ) : (
+              <div className="p-3.5 bg-slate-950 border border-slate-800 rounded-xl text-xs text-slate-400">
+                Viewing scheduled activities and sessions. Creating activities or initiating terminal codes requires Stake Presidency, System Admin, or YSA Leader authorization.
+              </div>
+            )}
 
             {/* Live Sessions Table */}
             <div>
@@ -758,53 +987,101 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
                   <thead className="bg-slate-900 border-b border-slate-800 uppercase text-[10px] text-slate-400">
                     <tr>
                       <th className="px-4 py-3">Session</th>
-                      <th className="px-4 py-3">Date</th>
+                      <th className="px-4 py-3">Date & Time</th>
                       <th className="px-4 py-3">Status</th>
                       <th className="px-4 py-3">Terminals</th>
+                      <th className="px-4 py-3">Active Kiosk Code</th>
                       <th className="px-4 py-3 text-right">Actions</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {sessions.map((s) => (
-                      <tr key={s.id} className="border-b border-slate-900 hover:bg-slate-900/50">
-                        <td className="px-4 py-3 font-semibold text-white">{s.sessionTitle}</td>
-                        <td className="px-4 py-3">{s.sessionDate}</td>
-                        <td className="px-4 py-3">
-                          <span className={`px-2 py-0.5 rounded text-[10px] uppercase font-semibold ${
-                            s.status === 'active' ? 'bg-emerald-950 text-emerald-400 border border-emerald-800' : 'bg-slate-800 text-slate-400'
-                          }`}>
-                            {s.status}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3">{s.maxTerminals} max</td>
-                        <td className="px-4 py-3 text-right space-x-2">
-                          {s.status === 'draft' && (
-                            <button
-                              onClick={() => handleInitiateSession(s.id)}
-                              className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-[11px] font-semibold"
-                            >
-                              Activate Code
-                            </button>
-                          )}
-                          {s.status === 'active' && (
-                            <button
-                              onClick={() => handleCloseSession(s.id)}
-                              className="px-2.5 py-1 bg-red-950 hover:bg-red-900 border border-red-800 text-red-300 rounded text-[11px] font-semibold"
-                            >
-                              Close Session
-                            </button>
-                          )}
-                          {s.status === 'closed' && isStakeLeader && (
-                            <button
-                              onClick={() => setReopenSessionId(s.id)}
-                              className="px-2.5 py-1 bg-amber-950 hover:bg-amber-900 border border-amber-800 text-amber-300 rounded text-[11px] font-semibold"
-                            >
-                              Reopen
-                            </button>
-                          )}
-                        </td>
+                    {sessions.map((s) => {
+                      const generatedCode = activeSessionCodes[s.id]
+                      return (
+                        <tr key={s.id} className="border-b border-slate-900 hover:bg-slate-900/50">
+                          <td className="px-4 py-3 font-semibold text-white">
+                            {s.sessionTitle}
+                            {s.participatingUnits && s.participatingUnits.length > 0 && (
+                              <span className="ml-2 text-[10px] text-slate-400 font-normal">
+                                ({s.participatingUnits.length} unit{s.participatingUnits.length > 1 ? 's' : ''})
+                              </span>
+                            )}
+                          </td>
+                          <td className="px-4 py-3">{s.sessionDate} • {s.startTime}</td>
+                          <td className="px-4 py-3">
+                            <span className={`px-2 py-0.5 rounded text-[10px] uppercase font-semibold ${
+                              s.status === 'active' ? 'bg-emerald-950 text-emerald-400 border border-emerald-800' : 'bg-slate-800 text-slate-400'
+                            }`}>
+                              {s.status}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3">{s.maxTerminals} max</td>
+                          <td className="px-4 py-3">
+                            {s.status === 'active' && generatedCode ? (
+                              <div className="inline-flex items-center space-x-2 bg-slate-900 border border-emerald-700/60 px-2.5 py-1 rounded-lg">
+                                <span className="font-mono font-bold text-emerald-400 tracking-widest">{generatedCode}</span>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (typeof navigator !== 'undefined' && navigator.clipboard) {
+                                      navigator.clipboard.writeText(`${window.location.origin}/${generatedCode}`)
+                                      setStatusMsg({ type: 'success', text: `Direct kiosk link copied: ${window.location.origin}/${generatedCode}` })
+                                    }
+                                  }}
+                                  className="text-slate-400 hover:text-white"
+                                  title="Copy Direct Kiosk Link"
+                                >
+                                  <Copy className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            ) : s.status === 'active' ? (
+                              <span className="text-[11px] text-slate-400">Code active (hashed)</span>
+                            ) : (
+                              <span className="text-[11px] text-slate-600">-</span>
+                            )}
+                          </td>
+                          <td className="px-4 py-3 text-right space-x-2">
+                            {canManageActivities && s.status === 'draft' && (
+                              <button
+                                onClick={() => handleInitiateSession(s)}
+                                className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-[11px] font-semibold"
+                              >
+                                Activate Code
+                              </button>
+                            )}
+                            {canManageActivities && s.status === 'active' && (
+                              <>
+                                <button
+                                  onClick={() => handleInitiateSession(s)}
+                                  className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded text-[11px] font-semibold"
+                                >
+                                  Rotate Code
+                                </button>
+                                <button
+                                  onClick={() => handleCloseSession(s.id)}
+                                  className="px-2.5 py-1 bg-red-950 hover:bg-red-900 border border-red-800 text-red-300 rounded text-[11px] font-semibold"
+                                >
+                                  Close Session
+                                </button>
+                              </>
+                            )}
+                            {s.status === 'closed' && isStakeLeader && (
+                              <button
+                                onClick={() => setReopenSessionId(s.id)}
+                                className="px-2.5 py-1 bg-amber-950 hover:bg-amber-900 border border-amber-800 text-amber-300 rounded text-[11px] font-semibold"
+                              >
+                                Reopen
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      )
+                    })}
+                    {sessions.length === 0 && (
+                      <tr>
+                        <td colSpan={6} className="px-4 py-6 text-center text-slate-500">No sessions scheduled yet.</td>
                       </tr>
-                    ))}
+                    )}
                   </tbody>
                 </table>
               </div>
@@ -851,7 +1128,7 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
                 <div>
                   <h3 className="text-base font-bold text-white">Authorized Leader Check-In</h3>
                   <p className="text-xs text-slate-400">
-                    Directly check in a member without terminal token. Audited with caller credentials.
+                    Directly check in an active member within your unit authority. Audited with caller credentials.
                   </p>
                 </div>
               </div>
@@ -861,7 +1138,10 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
                   <label className="block text-xs font-semibold text-slate-300 uppercase mb-1">Active Session</label>
                   <select
                     value={manualSessionId}
-                    onChange={(e) => setManualSessionId(e.target.value)}
+                    onChange={(e) => {
+                      setManualSessionId(e.target.value)
+                      setManualMemberId('')
+                    }}
                     className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-xl text-xs text-white"
                   >
                     <option value="">Select Active Session</option>
@@ -870,14 +1150,16 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-slate-300 uppercase mb-1">Select Member</label>
+                  <label className="block text-xs font-semibold text-slate-300 uppercase mb-1">
+                    Select Active Member ({eligibleManualMembers.length} in scope)
+                  </label>
                   <select
                     value={manualMemberId}
                     onChange={(e) => setManualMemberId(e.target.value)}
                     className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-xl text-xs text-white"
                   >
                     <option value="">Select Member</option>
-                    {members.map(m => (
+                    {eligibleManualMembers.map(m => (
                       <option key={m.id} value={m.id}>
                         {m.fullName} ({m.homeUnitName || 'Unit'})
                       </option>
@@ -942,7 +1224,7 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
                     className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-lg text-xs text-white"
                   >
                     <option value="">Select Unit</option>
-                    {units.map(u => <option key={u.id} value={u.id}>{u.unitName}</option>)}
+                    {memberCreatableUnits.map(u => <option key={u.id} value={u.id}>{u.unitName}</option>)}
                   </select>
                 </div>
                 <div>
@@ -1019,8 +1301,12 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
                       <td className="px-4 py-3 text-right">
                         <button
                           onClick={async () => {
-                            await memberService.toggleMemberStatus(m.id, !m.isActive)
-                            loadCurrentSubpathData()
+                            try {
+                              await memberService.toggleMemberStatus(m.id, !m.isActive)
+                              await loadCurrentSubpathData()
+                            } catch (err: any) {
+                              setStatusMsg({ type: 'error', text: err?.message || 'Failed to update member status' })
+                            }
                           }}
                           className="text-[11px] text-slate-400 hover:text-white"
                         >
@@ -1042,123 +1328,299 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
 
         {/* 6. REPORTS & EXPORTS VIEW */}
         {currentSubpath === 'reports' && (
-          <div className="space-y-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <h3 className="text-sm font-bold text-white">Monthly Attendance Register</h3>
-                <p className="text-xs text-slate-400">Calculates percentages against actual activity opportunities.</p>
+          <div className="space-y-8">
+            {/* Monthly Unit Register */}
+            <div className="space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-4">
+                <div>
+                  <h3 className="text-sm font-bold text-white">Monthly Attendance Register</h3>
+                  <p className="text-xs text-slate-400">Calculates percentages against actual activity opportunities in period.</p>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <select
+                    aria-label="Report Year"
+                    value={reportYear}
+                    onChange={(e) => setReportYear(Number(e.target.value))}
+                    className="px-3 py-1.5 bg-slate-950 border border-slate-800 rounded-lg text-xs text-white"
+                  >
+                    {[2025, 2026, 2027].map(yr => (
+                      <option key={yr} value={yr}>{yr}</option>
+                    ))}
+                  </select>
+                  <select
+                    aria-label="Report Month"
+                    value={reportMonth}
+                    onChange={(e) => setReportMonth(Number(e.target.value))}
+                    className="px-3 py-1.5 bg-slate-950 border border-slate-800 rounded-lg text-xs text-white"
+                  >
+                    {Array.from({ length: 12 }, (_, idx) => idx + 1).map(m => (
+                      <option key={m} value={m}>
+                        {new Date(2026, m - 1, 1).toLocaleString('en-US', { month: 'long' })}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    onClick={() => window.print()}
+                    className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-lg text-xs font-semibold flex items-center space-x-1.5"
+                  >
+                    <Printer className="w-3.5 h-3.5" />
+                    <span>Print / PDF</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      reportService.exportToCsv(
+                        unitMonthlyStats,
+                        `ysa_attendance_register_${reportYear}_${String(reportMonth).padStart(2, '0')}`
+                      )
+                    }
+                    className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold flex items-center space-x-1.5"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>Export CSV</span>
+                  </button>
+                </div>
               </div>
-              <button
-                onClick={() => reportService.exportToCsv(unitMonthlyStats, `ysa_attendance_register_${new Date().toISOString().slice(0, 7)}`)}
-                className="px-3.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-lg text-xs font-semibold flex items-center space-x-1.5"
-              >
-                <Download className="w-3.5 h-3.5" />
-                <span>Export CSV</span>
-              </button>
+
+              <div className="bg-slate-950 border border-slate-800 rounded-xl overflow-hidden">
+                <table className="w-full text-xs text-left text-slate-300">
+                  <thead className="bg-slate-900 border-b border-slate-800 uppercase text-[10px] text-slate-400">
+                    <tr>
+                      <th className="px-4 py-3">Stake Unit</th>
+                      <th className="px-4 py-3">Active Census</th>
+                      <th className="px-4 py-3">Total Check-Ins</th>
+                      <th className="px-4 py-3">Eligible Opps</th>
+                      <th className="px-4 py-3">Attendance %</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {unitMonthlyStats.map(stat => (
+                      <tr key={stat.unitId} className="border-b border-slate-900 hover:bg-slate-900/50">
+                        <td className="px-4 py-3 font-semibold text-white">{stat.unitName}</td>
+                        <td className="px-4 py-3">{stat.totalMembers}</td>
+                        <td className="px-4 py-3">{stat.totalAttended}</td>
+                        <td className="px-4 py-3">{stat.totalOpportunities}</td>
+                        <td className="px-4 py-3 font-bold text-emerald-400">
+                          {stat.percentage !== null ? `${stat.percentage}%` : 'N/A (No events)'}
+                        </td>
+                      </tr>
+                    ))}
+                    {unitMonthlyStats.length === 0 && (
+                      <tr>
+                        <td colSpan={5} className="px-4 py-6 text-center text-slate-500">No attendance data in selected period.</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
             </div>
 
-            <div className="bg-slate-950 border border-slate-800 rounded-xl overflow-hidden">
-              <table className="w-full text-xs text-left text-slate-300">
-                <thead className="bg-slate-900 border-b border-slate-800 uppercase text-[10px] text-slate-400">
-                  <tr>
-                    <th className="px-4 py-3">Stake Unit</th>
-                    <th className="px-4 py-3">Active Census</th>
-                    <th className="px-4 py-3">Total Check-Ins</th>
-                    <th className="px-4 py-3">Eligible Opps</th>
-                    <th className="px-4 py-3">Attendance %</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {unitMonthlyStats.map(stat => (
-                    <tr key={stat.unitId} className="border-b border-slate-900 hover:bg-slate-900/50">
-                      <td className="px-4 py-3 font-semibold text-white">{stat.unitName}</td>
-                      <td className="px-4 py-3">{stat.totalMembers}</td>
-                      <td className="px-4 py-3">{stat.totalAttended}</td>
-                      <td className="px-4 py-3">{stat.totalOpportunities}</td>
-                      <td className="px-4 py-3 font-bold text-emerald-400">
-                        {stat.percentage !== null ? `${stat.percentage}%` : 'N/A (No events)'}
-                      </td>
-                    </tr>
-                  ))}
-                  {unitMonthlyStats.length === 0 && (
-                    <tr>
-                      <td colSpan={5} className="px-4 py-6 text-center text-slate-500">No attendance data in selected period.</td>
-                    </tr>
+            {/* Individual Member Attendance History */}
+            <div className="space-y-4 pt-6 border-t border-slate-800">
+              <div className="flex flex-wrap items-center justify-between gap-4">
+                <div>
+                  <h3 className="text-sm font-bold text-white">Individual Attendance History</h3>
+                  <p className="text-xs text-slate-400">Inspect complete check-in history for any member in your unit scope.</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <select
+                    aria-label="Inspect Member History"
+                    value={selectedHistoryMemberId}
+                    onChange={(e) => handleLoadMemberHistory(e.target.value)}
+                    className="px-3 py-1.5 bg-slate-950 border border-slate-800 rounded-lg text-xs text-white min-w-[220px]"
+                  >
+                    <option value="">Select Member to Inspect...</option>
+                    {members.map(m => (
+                      <option key={m.id} value={m.id}>
+                        {m.fullName} ({m.homeUnitName || 'Unit'})
+                      </option>
+                    ))}
+                  </select>
+                  {memberHistory && memberHistory.sessions.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        reportService.exportToCsv(
+                          memberHistory.sessions,
+                          `ysa_member_history_${memberHistory.fullName.replace(/\s+/g, '_').toLowerCase()}`
+                        )
+                      }
+                      className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-lg text-xs font-semibold flex items-center space-x-1.5"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      <span>Export History</span>
+                    </button>
                   )}
-                </tbody>
-              </table>
+                </div>
+              </div>
+
+              {memberHistory && (
+                <div className="bg-slate-950 border border-slate-800 rounded-xl overflow-hidden">
+                  <div className="px-4 py-3 bg-slate-900/70 border-b border-slate-800 flex items-center justify-between text-xs">
+                    <div>
+                      <span className="font-bold text-white">{memberHistory.fullName}</span>
+                      <span className="text-slate-400 ml-2">({memberHistory.homeUnitName})</span>
+                    </div>
+                    <span className="px-2.5 py-0.5 rounded bg-emerald-950 text-emerald-400 border border-emerald-800 font-semibold">
+                      Total Sessions Attended: {memberHistory.attendedCount}
+                    </span>
+                  </div>
+                  <table className="w-full text-xs text-left text-slate-300">
+                    <thead className="bg-slate-900 border-b border-slate-800 uppercase text-[10px] text-slate-400">
+                      <tr>
+                        <th className="px-4 py-2.5">Session Title</th>
+                        <th className="px-4 py-2.5">Session Date</th>
+                        <th className="px-4 py-2.5">Check-In Timestamp</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {memberHistory.sessions.map((s) => (
+                        <tr key={`${s.sessionId}-${s.checkInTime}`} className="border-b border-slate-900">
+                          <td className="px-4 py-2.5 font-semibold text-white">{s.sessionTitle}</td>
+                          <td className="px-4 py-2.5">{s.sessionDate}</td>
+                          <td className="px-4 py-2.5 font-mono text-[11px]">{new Date(s.checkInTime).toLocaleString()}</td>
+                        </tr>
+                      ))}
+                      {memberHistory.sessions.length === 0 && (
+                        <tr>
+                          <td colSpan={3} className="px-4 py-4 text-center text-slate-500">No recorded check-ins for this member yet.</td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
+            {/* Session Visitors Register */}
+            <div className="space-y-4 pt-6 border-t border-slate-800">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-sm font-bold text-white">Session Visitors Register</h3>
+                  <p className="text-xs text-slate-400">
+                    Scoped to inviting unit assignments for ward/branch leaders; unassigned visitors visible only to stake-wide leaders.
+                  </p>
+                </div>
+                {visitorsList.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => reportService.exportToCsv(visitorsList, `ysa_visitors_register_${reportYear}`)}
+                    className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-lg text-xs font-semibold flex items-center space-x-1.5"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>Export Visitors CSV</span>
+                  </button>
+                )}
+              </div>
+
+              <div className="bg-slate-950 border border-slate-800 rounded-xl overflow-hidden">
+                <table className="w-full text-xs text-left text-slate-300">
+                  <thead className="bg-slate-900 border-b border-slate-800 uppercase text-[10px] text-slate-400">
+                    <tr>
+                      <th className="px-4 py-3">Visitor Name</th>
+                      <th className="px-4 py-3">Inviting Unit</th>
+                      <th className="px-4 py-3">Session</th>
+                      <th className="px-4 py-3">Contact Phone</th>
+                      <th className="px-4 py-3">Check-In Time</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {visitorsList.map(v => (
+                      <tr key={v.id} className="border-b border-slate-900 hover:bg-slate-900/50">
+                        <td className="px-4 py-3 font-semibold text-white">{v.fullName}</td>
+                        <td className="px-4 py-3">{v.invitingUnitName}</td>
+                        <td className="px-4 py-3">{v.sessionTitle} ({v.sessionDate})</td>
+                        <td className="px-4 py-3">{v.contactPhone || '-'}</td>
+                        <td className="px-4 py-3 font-mono text-[11px]">{new Date(v.createdAt).toLocaleString()}</td>
+                      </tr>
+                    ))}
+                    {visitorsList.length === 0 && (
+                      <tr>
+                        <td colSpan={5} className="px-4 py-6 text-center text-slate-500">No visitor records in scope.</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
             </div>
           </div>
         )}
 
-        {/* 7. USER GOVERNANCE VIEW (SYSTEM ADMIN ONLY) */}
+        {/* 7. USER GOVERNANCE VIEW */}
         {currentSubpath === 'users' && (
           <div className="space-y-6">
             {!isStakeLeader ? (
               <div className="p-8 text-center text-slate-500">
                 <Shield className="w-8 h-8 mx-auto mb-2 text-slate-600" />
-                <p>User provisioning and governance is restricted to Stake System Administrators.</p>
+                <p>User provisioning and governance is restricted to Stake System Administrators and Stake Presidency.</p>
               </div>
             ) : (
               <>
-                {/* Role / Unit Assignment Form */}
-                <form
-                  onSubmit={async (e) => {
-                    e.preventDefault()
-                    if (!assignUserId) return
-                    try {
-                      await adminService.assignUserRole(assignUserId, assignRole)
-                      if (assignUnitId && ['bishop', 'branch_president', 'ysa_leader'].includes(assignRole)) {
-                        await adminService.assignUserUnit(assignUserId, assignUnitId, assignRole as any)
+                {isSystemAdmin ? (
+                  <form
+                    onSubmit={async (e) => {
+                      e.preventDefault()
+                      if (!assignUserId) return
+                      try {
+                        await adminService.assignUserRole(assignUserId, assignRole)
+                        if (assignUnitId && ['bishop', 'branch_president', 'ysa_leader'].includes(assignRole)) {
+                          await adminService.assignUserUnit(assignUserId, assignUnitId, assignRole as any)
+                        }
+                        await loadCurrentSubpathData()
+                        setStatusMsg({ type: 'success', text: 'Role and unit assignment saved.' })
+                      } catch (err: any) {
+                        setStatusMsg({ type: 'error', text: err?.message || 'Assignment failed' })
                       }
-                      setStatusMsg({ type: 'success', text: 'Role and unit assigned successfully.' })
-                      loadCurrentSubpathData()
-                    } catch (err: any) {
-                      setStatusMsg({ type: 'error', text: err?.message || 'Assignment failed' })
-                    }
-                  }}
-                  className="bg-slate-950 border border-slate-800 p-4 rounded-xl flex flex-wrap gap-3 items-end"
-                >
-                  <div className="flex-1 min-w-[200px]">
-                    <label className="block text-[11px] text-slate-300 uppercase mb-1">Leader User</label>
-                    <select
-                      value={assignUserId}
-                      onChange={(e) => setAssignUserId(e.target.value)}
-                      className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-lg text-xs text-white"
-                    >
-                      <option value="">Select User Profile</option>
-                      {usersList.map(u => <option key={u.id} value={u.id}>{u.fullName} ({u.email})</option>)}
-                    </select>
+                    }}
+                    className="bg-slate-950 border border-slate-800 p-4 rounded-xl flex flex-wrap gap-3 items-end"
+                  >
+                    <div className="flex-1 min-w-[200px]">
+                      <label className="block text-[11px] text-slate-300 uppercase mb-1">Leader User</label>
+                      <select
+                        value={assignUserId}
+                        onChange={(e) => setAssignUserId(e.target.value)}
+                        className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-lg text-xs text-white"
+                      >
+                        <option value="">Select User Profile</option>
+                        {usersList.map(u => <option key={u.id} value={u.id}>{u.fullName} ({u.email})</option>)}
+                      </select>
+                    </div>
+                    <div className="w-44">
+                      <label className="block text-[11px] text-slate-300 uppercase mb-1">Assign Role</label>
+                      <select
+                        value={assignRole}
+                        onChange={(e) => setAssignRole(e.target.value as any)}
+                        className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-lg text-xs text-white"
+                      >
+                        <option value="ysa_leader">YSA Leader</option>
+                        <option value="bishop">Bishop</option>
+                        <option value="branch_president">Branch President</option>
+                        <option value="stake_presidency">Stake Presidency</option>
+                        <option value="system_admin">System Admin</option>
+                      </select>
+                    </div>
+                    <div className="w-44">
+                      <label className="block text-[11px] text-slate-300 uppercase mb-1">Assign Unit</label>
+                      <select
+                        value={assignUnitId}
+                        onChange={(e) => setAssignUnitId(e.target.value)}
+                        className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-lg text-xs text-white"
+                      >
+                        <option value="">None / Stake Wide</option>
+                        {units.map(u => <option key={u.id} value={u.id}>{u.unitName}</option>)}
+                      </select>
+                    </div>
+                    <button type="submit" className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold">
+                      Authorize Role
+                    </button>
+                  </form>
+                ) : (
+                  <div className="p-3.5 bg-slate-950 border border-slate-800 rounded-xl text-xs text-slate-400">
+                    Read-only directory view. Assigning or revoking leadership roles and account status requires `system_admin` authority.
                   </div>
-                  <div className="w-44">
-                    <label className="block text-[11px] text-slate-300 uppercase mb-1">Assign Role</label>
-                    <select
-                      value={assignRole}
-                      onChange={(e) => setAssignRole(e.target.value as any)}
-                      className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-lg text-xs text-white"
-                    >
-                      <option value="ysa_leader">YSA Leader</option>
-                      <option value="bishop">Bishop</option>
-                      <option value="branch_president">Branch President</option>
-                      <option value="stake_presidency">Stake Presidency</option>
-                      <option value="system_admin">System Admin</option>
-                    </select>
-                  </div>
-                  <div className="w-44">
-                    <label className="block text-[11px] text-slate-300 uppercase mb-1">Assign Unit</label>
-                    <select
-                      value={assignUnitId}
-                      onChange={(e) => setAssignUnitId(e.target.value)}
-                      className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-lg text-xs text-white"
-                    >
-                      <option value="">None / Stake Wide</option>
-                      {units.map(u => <option key={u.id} value={u.id}>{u.unitName}</option>)}
-                    </select>
-                  </div>
-                  <button type="submit" className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold">
-                    Authorize Role
-                  </button>
-                </form>
+                )}
 
                 {/* Users List */}
                 <div className="bg-slate-950 border border-slate-800 rounded-xl overflow-hidden">
@@ -1169,7 +1631,7 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
                         <th className="px-4 py-3">Roles</th>
                         <th className="px-4 py-3">Unit Assignments</th>
                         <th className="px-4 py-3">Account Status</th>
-                        <th className="px-4 py-3 text-right">Actions</th>
+                        {isSystemAdmin && <th className="px-4 py-3 text-right">Actions</th>}
                       </tr>
                     </thead>
                     <tbody>
@@ -1182,19 +1644,62 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
                           <td className="px-4 py-3">
                             <div className="flex flex-wrap gap-1">
                               {u.roles.map(r => (
-                                <span key={r} className="px-1.5 py-0.5 rounded bg-slate-800 text-[10px] text-emerald-400 border border-slate-700">
-                                  {r}
+                                <span key={r} className="inline-flex items-center space-x-1 px-1.5 py-0.5 rounded bg-slate-800 text-[10px] text-emerald-400 border border-slate-700">
+                                  <span>{r}</span>
+                                  {isSystemAdmin && (
+                                    <button
+                                      type="button"
+                                      title={`Revoke role ${r}`}
+                                      onClick={async () => {
+                                        try {
+                                          await adminService.removeUserRole(u.id, r)
+                                          await loadCurrentSubpathData()
+                                          setStatusMsg({ type: 'success', text: `Revoked role "${r}" from ${u.fullName}.` })
+                                        } catch (err: any) {
+                                          setStatusMsg({ type: 'error', text: err?.message || 'Failed to revoke role' })
+                                        }
+                                      }}
+                                      className="text-slate-400 hover:text-red-400 ml-1"
+                                    >
+                                      ×
+                                    </button>
+                                  )}
                                 </span>
                               ))}
+                              {u.roles.length === 0 && (
+                                <span className="text-[11px] text-slate-500">No roles</span>
+                              )}
                             </div>
                           </td>
                           <td className="px-4 py-3">
-                            {(u.unitAssignments || []).map(ua => (
-                              <p key={ua.id} className="text-[11px] text-slate-300">{ua.unitName} ({ua.assignedRole})</p>
-                            ))}
-                            {(!u.unitAssignments || u.unitAssignments.length === 0) && (
-                              <span className="text-slate-500 text-[11px]">Stake-wide / None</span>
-                            )}
+                            <div className="space-y-1">
+                              {(u.unitAssignments || []).map(ua => (
+                                <div key={ua.id} className="flex items-center space-x-1.5 text-[11px] text-slate-300">
+                                  <span>{ua.unitName} ({ua.assignedRole})</span>
+                                  {isSystemAdmin && (
+                                    <button
+                                      type="button"
+                                      title="Remove unit assignment"
+                                      onClick={async () => {
+                                        try {
+                                          await adminService.removeUserUnitAssignment(ua.id)
+                                          await loadCurrentSubpathData()
+                                          setStatusMsg({ type: 'success', text: 'Unit assignment removed.' })
+                                        } catch (err: any) {
+                                          setStatusMsg({ type: 'error', text: err?.message || 'Failed to remove unit assignment' })
+                                        }
+                                      }}
+                                      className="text-slate-500 hover:text-red-400"
+                                    >
+                                      ×
+                                    </button>
+                                  )}
+                                </div>
+                              ))}
+                              {(!u.unitAssignments || u.unitAssignments.length === 0) && (
+                                <span className="text-slate-500 text-[11px]">Stake-wide / None</span>
+                              )}
+                            </div>
                           </td>
                           <td className="px-4 py-3">
                             <span className={`px-2 py-0.5 rounded text-[10px] uppercase font-semibold ${
@@ -1203,18 +1708,25 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
                               {u.accountStatus}
                             </span>
                           </td>
-                          <td className="px-4 py-3 text-right">
-                            <button
-                              onClick={async () => {
-                                const nextStatus = u.accountStatus === 'active' ? 'deactivated' : 'active'
-                                await adminService.updateUserStatus(u.id, nextStatus)
-                                loadCurrentSubpathData()
-                              }}
-                              className="text-[11px] text-slate-400 hover:text-white"
-                            >
-                              {u.accountStatus === 'active' ? 'Deactivate' : 'Activate'}
-                            </button>
-                          </td>
+                          {isSystemAdmin && (
+                            <td className="px-4 py-3 text-right">
+                              <button
+                                onClick={async () => {
+                                  const nextStatus = u.accountStatus === 'active' ? 'deactivated' : 'active'
+                                  try {
+                                    await adminService.updateUserStatus(u.id, nextStatus)
+                                    await loadCurrentSubpathData()
+                                    setStatusMsg({ type: 'success', text: `User account status updated to "${nextStatus}".` })
+                                  } catch (err: any) {
+                                    setStatusMsg({ type: 'error', text: err?.message || 'Failed to update account status' })
+                                  }
+                                }}
+                                className="text-[11px] text-slate-400 hover:text-white"
+                              >
+                                {u.accountStatus === 'active' ? 'Deactivate' : 'Activate'}
+                              </button>
+                            </td>
+                          )}
                         </tr>
                       ))}
                     </tbody>
@@ -1228,39 +1740,117 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
         {/* 8. AUDIT LOGS VIEW */}
         {currentSubpath === 'audit-logs' && (
           <div className="space-y-4">
-            <h3 className="text-xs font-bold text-white uppercase tracking-wider">Immutable Security Audit Trail</h3>
-            <div className="bg-slate-950 border border-slate-800 rounded-xl overflow-hidden">
-              <table className="w-full text-xs text-left text-slate-300">
-                <thead className="bg-slate-900 border-b border-slate-800 uppercase text-[10px] text-slate-400">
-                  <tr>
-                    <th className="px-4 py-3">Timestamp</th>
-                    <th className="px-4 py-3">Actor</th>
-                    <th className="px-4 py-3">Action</th>
-                    <th className="px-4 py-3">Target Table</th>
-                    <th className="px-4 py-3">Outcome</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {auditLogs.map(l => (
-                    <tr key={l.id} className="border-b border-slate-900 hover:bg-slate-900/50 font-mono text-[11px]">
-                      <td className="px-4 py-3">{new Date(l.createdAt).toLocaleString()}</td>
-                      <td className="px-4 py-3 text-white font-sans">{l.actorName}</td>
-                      <td className="px-4 py-3 font-semibold text-emerald-400">{l.action}</td>
-                      <td className="px-4 py-3 text-slate-400">{l.targetTable || '-'}</td>
-                      <td className="px-4 py-3 uppercase text-[10px]">
-                        <span className={l.outcome === 'success' ? 'text-emerald-400' : 'text-red-400'}>
-                          {l.outcome}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                  {auditLogs.length === 0 && (
-                    <tr>
-                      <td colSpan={5} className="px-4 py-6 text-center text-slate-500">No audit records found.</td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
+            {!isStakeLeader ? (
+              <div className="p-8 text-center text-slate-500">
+                <Shield className="w-8 h-8 mx-auto mb-2 text-slate-600" />
+                <p>Security audit logs are restricted to Stake Presidency and System Administrators.</p>
+              </div>
+            ) : (
+              <>
+                <h3 className="text-xs font-bold text-white uppercase tracking-wider">Immutable Security Audit Trail</h3>
+                <div className="bg-slate-950 border border-slate-800 rounded-xl overflow-hidden">
+                  <table className="w-full text-xs text-left text-slate-300">
+                    <thead className="bg-slate-900 border-b border-slate-800 uppercase text-[10px] text-slate-400">
+                      <tr>
+                        <th className="px-4 py-3">Timestamp</th>
+                        <th className="px-4 py-3">Actor</th>
+                        <th className="px-4 py-3">Action</th>
+                        <th className="px-4 py-3">Target Table</th>
+                        <th className="px-4 py-3">Outcome</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {auditLogs.map(l => (
+                        <tr key={l.id} className="border-b border-slate-900 hover:bg-slate-900/50 font-mono text-[11px]">
+                          <td className="px-4 py-3">{new Date(l.createdAt).toLocaleString()}</td>
+                          <td className="px-4 py-3 text-white font-sans">{l.actorName}</td>
+                          <td className="px-4 py-3 font-semibold text-emerald-400">{l.action}</td>
+                          <td className="px-4 py-3 text-slate-400">{l.targetTable || '-'}</td>
+                          <td className="px-4 py-3 uppercase text-[10px]">
+                            <span className={l.outcome === 'success' ? 'text-emerald-400' : 'text-red-400'}>
+                              {l.outcome}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                      {auditLogs.length === 0 && (
+                        <tr>
+                          <td colSpan={5} className="px-4 py-6 text-center text-slate-500">No audit records found.</td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
+        {/* 9. SETTINGS & SECURITY PROFILE VIEW */}
+        {currentSubpath === 'settings' && (
+          <div className="space-y-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div className="p-5 bg-slate-950 border border-slate-800 rounded-xl space-y-3">
+                <h3 className="text-xs font-bold text-white uppercase tracking-wider">Stake & System Configuration</h3>
+                <div className="text-xs space-y-2 text-slate-300">
+                  <div className="flex justify-between py-1.5 border-b border-slate-900">
+                    <span className="text-slate-400">Stake Name</span>
+                    <span className="font-semibold text-white">Abeokuta Nigeria Obantoko Stake</span>
+                  </div>
+                  <div className="flex justify-between py-1.5 border-b border-slate-900">
+                    <span className="text-slate-400">Canonical Timezone</span>
+                    <span className="font-mono text-emerald-400">Africa/Lagos (WAT, UTC+1)</span>
+                  </div>
+                  <div className="flex justify-between py-1.5 border-b border-slate-900">
+                    <span className="text-slate-400">Kiosk Lease Policy</span>
+                    <span>10-min lease / 4-min heartbeat</span>
+                  </div>
+                  <div className="flex justify-between py-1.5">
+                    <span className="text-slate-400">Audit Trail Policy</span>
+                    <span>Append-only (SECURITY DEFINER RPCs)</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="p-5 bg-slate-950 border border-slate-800 rounded-xl space-y-3">
+                <h3 className="text-xs font-bold text-white uppercase tracking-wider">Authenticated Leader Profile</h3>
+                <div className="text-xs space-y-2 text-slate-300">
+                  <div className="flex justify-between py-1.5 border-b border-slate-900">
+                    <span className="text-slate-400">Full Name</span>
+                    <span className="font-semibold text-white">{user?.fullName}</span>
+                  </div>
+                  <div className="flex justify-between py-1.5 border-b border-slate-900">
+                    <span className="text-slate-400">Email</span>
+                    <span>{user?.email}</span>
+                  </div>
+                  <div className="flex justify-between py-1.5 border-b border-slate-900">
+                    <span className="text-slate-400">Account Status</span>
+                    <span className="uppercase text-emerald-400 font-semibold">{user?.accountStatus}</span>
+                  </div>
+                  <div className="flex justify-between py-1.5">
+                    <span className="text-slate-400">Assigned Roles</span>
+                    <span className="font-mono text-emerald-400">{(user?.roles || []).join(', ')}</span>
+                  </div>
+                </div>
+                {user?.email && (
+                  <div className="pt-2">
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        const res = await authService.resetPasswordForEmail(user.email)
+                        if (res.success) {
+                          setStatusMsg({ type: 'success', text: `Password reset email sent to ${user.email}.` })
+                        } else {
+                          setStatusMsg({ type: 'error', text: res.error || 'Failed to send password reset email.' })
+                        }
+                      }}
+                      className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-lg text-xs font-semibold"
+                    >
+                      Send Password Reset Link
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         )}

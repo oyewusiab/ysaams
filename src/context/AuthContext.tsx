@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from 'react'
 import { UserProfile, AppRole } from '../types/database'
-import { authService } from '../services/authService'
+import { authService, validateAuthorizedProfile } from '../services/authService'
 import { supabase } from '../lib/supabase'
 
 interface AuthContextType {
@@ -8,6 +8,10 @@ interface AuthContextType {
   roles: AppRole[]
   isAuthenticated: boolean
   isLoading: boolean
+  isSystemAdmin: boolean
+  isStakeLeader: boolean
+  canManageActivities: boolean
+  assignedUnitIds: string[]
   hasRole: (role: AppRole) => boolean
   signOut: () => Promise<void>
 }
@@ -22,14 +26,29 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   useEffect(() => {
     let mounted = true
 
+    const applyValidatedProfile = async (profile: UserProfile | null) => {
+      const validation = validateAuthorizedProfile(profile)
+      if (!validation.authorized || !profile) {
+        await authService.signOut().catch(() => {})
+        if (mounted) {
+          setUser(null)
+          setRoles([])
+        }
+        return
+      }
+      if (mounted) {
+        setUser(profile)
+        setRoles(profile.roles)
+      }
+    }
+
     const initAuth = async () => {
       try {
         const { data } = await authService.getSession()
         if (data.session?.user && mounted) {
           const profile = await authService.fetchUserProfile(data.session.user.id)
-          if (mounted && profile) {
-            setUser(profile)
-            setRoles(profile.roles)
+          if (mounted) {
+            await applyValidatedProfile(profile)
           }
         }
       } catch (err) {
@@ -45,15 +64,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (!mounted) return
       if (session?.user) {
         const profile = await authService.fetchUserProfile(session.user.id)
-        if (mounted && profile) {
-          setUser(profile)
-          setRoles(profile.roles)
+        if (mounted) {
+          await applyValidatedProfile(profile)
         }
       } else {
         setUser(null)
         setRoles([])
       }
-      setIsLoading(false)
+      if (mounted) {
+        setIsLoading(false)
+      }
     })
 
     return () => {
@@ -67,6 +87,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return roles.includes(role)
   }
 
+  const isSystemAdmin = roles.includes('system_admin')
+  const isStakeLeader = isSystemAdmin || roles.includes('stake_presidency')
+  const canManageActivities = isStakeLeader || roles.includes('ysa_leader')
+  const assignedUnitIds = Array.from(
+    new Set((user?.unitAssignments || []).map((ua) => ua.unitId).filter(Boolean))
+  )
+
   const signOut = async () => {
     await authService.signOut()
     setUser(null)
@@ -78,8 +105,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       value={{
         user,
         roles,
-        isAuthenticated: !!user,
+        isAuthenticated: !!user && user.accountStatus === 'active' && roles.length > 0,
         isLoading,
+        isSystemAdmin,
+        isStakeLeader,
+        canManageActivities,
+        assignedUnitIds,
         hasRole,
         signOut
       }}
@@ -96,3 +127,4 @@ export const useAuth = (): AuthContextType => {
   }
   return context
 }
+

@@ -8,7 +8,36 @@ export interface AuthState {
   error: string | null
 }
 
+export function validateAuthorizedProfile(
+  profile: UserProfile | null
+): { authorized: boolean; error?: string } {
+  if (!profile) {
+    return {
+      authorized: false,
+      error: 'No leadership profile found for this account. Please contact a Stake System Administrator.'
+    }
+  }
+
+  if (profile.accountStatus !== 'active') {
+    return {
+      authorized: false,
+      error: `Your account status is "${profile.accountStatus}". Please contact a Stake System Administrator.`
+    }
+  }
+
+  if (!profile.roles || profile.roles.length === 0) {
+    return {
+      authorized: false,
+      error: 'No active leadership roles are assigned to this account. Please contact a Stake System Administrator.'
+    }
+  }
+
+  return { authorized: true }
+}
+
 export const authService = {
+  validateAuthorizedProfile,
+
   async getSession() {
     return supabase.auth.getSession()
   },
@@ -28,19 +57,38 @@ export const authService = {
         return { success: false, error: 'Sign in succeeded but user is missing.' }
       }
 
-      // Validate account_status
+      // Validate profile existence, active account_status, and assigned leadership roles
       const profile = await this.fetchUserProfile(data.user.id)
-      if (profile && profile.accountStatus !== 'active') {
+      const validation = this.validateAuthorizedProfile(profile)
+      if (!validation.authorized) {
         await supabase.auth.signOut()
         return {
           success: false,
-          error: `Your account status is "${profile.accountStatus}". Please contact a Stake System Administrator.`
+          error: validation.error
         }
       }
 
       return { success: true }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Authentication failed'
+      return { success: false, error: msg }
+    }
+  },
+
+  async resetPasswordForEmail(email: string): Promise<{ success: boolean; error?: string }> {
+    try {
+      const cleanEmail = email.trim()
+      if (!cleanEmail) {
+        return { success: false, error: 'Please enter your leadership email address.' }
+      }
+      const redirectTo = typeof window !== 'undefined' ? `${window.location.origin}/la` : undefined
+      const { error } = await supabase.auth.resetPasswordForEmail(cleanEmail, { redirectTo })
+      if (error) {
+        return { success: false, error: error.message }
+      }
+      return { success: true }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to send password reset email'
       return { success: false, error: msg }
     }
   },

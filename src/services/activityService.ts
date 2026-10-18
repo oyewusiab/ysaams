@@ -164,7 +164,11 @@ export const activityService = {
     })
 
     if (error) return { success: false, error: error.message }
-    return { success: (data as any)?.success ?? true }
+    const res = data as { success?: boolean; error?: string } | null
+    if (res && res.success === false) {
+      return { success: false, error: res.error || 'Failed to initiate session' }
+    }
+    return { success: true }
   },
 
   async closeSession(sessionId: string): Promise<{ success: boolean; error?: string }> {
@@ -173,7 +177,11 @@ export const activityService = {
     })
 
     if (error) return { success: false, error: error.message }
-    return { success: (data as any)?.success ?? true }
+    const res = data as { success?: boolean; error?: string } | null
+    if (res && res.success === false) {
+      return { success: false, error: res.error || 'Failed to close session' }
+    }
+    return { success: true }
   },
 
   async reopenSession(sessionId: string, reason: string, durationMinutes: number = 60): Promise<{ success: boolean; error?: string }> {
@@ -184,6 +192,11 @@ export const activityService = {
     })
 
     if (error) return { success: false, error: error.message }
-    return { success: (data as any)?.success ?? true }
+    const res = data as { success?: boolean; error?: string } | null
+    if (res && res.success === false) {
+      return { success: false, error: res.error || 'Failed to reopen session' }
+    }
+    return { success: true }
   }
 }
+

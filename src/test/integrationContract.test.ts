@@ -114,4 +114,20 @@ describe('Migration Static Contract & Verification Tests', () => {
     expect(content).toContain('REVOKE EXECUTE ON FUNCTION public.record_manual_attendance(UUID, UUID, TEXT) FROM anon')
     expect(content).toContain('GRANT EXECUTE ON FUNCTION public.record_manual_attendance(UUID, UUID, TEXT) TO authenticated')
   })
+
+  it('verifies Migration 7 restores admin table write grants under forced RLS, syncs auth.users profiles, and defines token-validated kiosk member lookup', () => {
+    const content = fs.readFileSync(
+      path.join(migrationsDir, '20261019000007_release_readiness_admin_and_kiosk_remediation.sql'),
+      'utf-8'
+    )
+    expect(content).toContain('GRANT INSERT, UPDATE ON TABLE public.stake_units TO authenticated')
+    expect(content).toContain('GRANT INSERT ON TABLE public.user_profiles TO authenticated')
+    expect(content).toContain('GRANT INSERT, DELETE ON TABLE public.user_roles TO authenticated')
+    expect(content).toContain('GRANT INSERT, DELETE ON TABLE public.user_unit_assignments TO authenticated')
+    expect(content).toContain('fn_sync_auth_user_profile')
+    expect(content).toContain('trg_on_auth_user_created')
+    expect(content).toContain('CREATE OR REPLACE FUNCTION public.search_terminal_members')
+    expect(content).toContain('v_session.visitor_registration_enabled IS NOT TRUE')
+  })
 })
+

@@ -5,6 +5,7 @@ import { PublicAttendanceView } from './components/public/PublicAttendanceView'
 import { TerminalView } from './components/public/TerminalView'
 import { LeadershipPortalView } from './components/leadership/LeadershipPortalView'
 import { LeadershipRoute } from './types/database'
+import { attendanceService } from './services/attendanceService'
 
 /**
  * Pure route resolution helper functions.
@@ -51,11 +52,18 @@ export const AppContent: React.FC = () => {
   const [currentPath, setCurrentPath] = useState(() =>
     typeof window !== 'undefined' ? window.location.pathname : '/'
   )
-  const [activeTerminalCode, setActiveTerminalCode] = useState<string | null>(() =>
-    typeof window !== 'undefined' ? sessionStorage.getItem('ysaams_terminal_token') ? 'Active Kiosk' : null : null
-  )
-  const [terminalSessionTitle, setTerminalSessionTitle] = useState<string>('Active YSA Session')
-  const [terminalSessionDate, setTerminalSessionDate] = useState<string>('Today')
+  const [activeTerminalCode, setActiveTerminalCode] = useState<string | null>(() => {
+    const meta = attendanceService.getStoredSessionMetadata()
+    return meta.token ? 'Active Kiosk' : null
+  })
+  const [terminalSessionTitle, setTerminalSessionTitle] = useState<string>(() => {
+    const meta = attendanceService.getStoredSessionMetadata()
+    return meta.sessionTitle || 'Active YSA Session'
+  })
+  const [terminalSessionDate, setTerminalSessionDate] = useState<string>(() => {
+    const meta = attendanceService.getStoredSessionMetadata()
+    return meta.sessionDate || 'Today'
+  })
 
   useEffect(() => {
     const handlePopState = () => {

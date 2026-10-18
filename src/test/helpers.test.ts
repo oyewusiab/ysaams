@@ -1,6 +1,9 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeEach } from 'vitest'
 import { generateSessionCode } from '../services/activityService'
-import { calculateAttendancePercentage } from '../services/reportService'
+import { calculateAttendancePercentage, getMonthDateRange } from '../services/reportService'
+import { validateAuthorizedProfile } from '../services/authService'
+import { attendanceService } from '../services/attendanceService'
+import { UserProfile } from '../types/database'
 
 describe('Domain Helper Engines', () => {
   describe('Session Code Generator', () => {
@@ -33,4 +36,98 @@ describe('Domain Helper Engines', () => {
       expect(calculateAttendancePercentage(10, 10)).toBe(100.0)
     })
   })
+
+  describe('Calendar Month Date Range Validation', () => {
+    it('computes valid PostgreSQL DATE boundaries for 28-day, 29-day, 30-day, and 31-day months', () => {
+      expect(getMonthDateRange(2026, 2)).toEqual({
+        startDate: '2026-02-01',
+        endDate: '2026-02-28'
+      })
+      expect(getMonthDateRange(2024, 2)).toEqual({
+        startDate: '2024-02-01',
+        endDate: '2024-02-29'
+      })
+      expect(getMonthDateRange(2026, 4)).toEqual({
+        startDate: '2026-04-01',
+        endDate: '2026-04-30'
+      })
+      expect(getMonthDateRange(2026, 10)).toEqual({
+        startDate: '2026-10-01',
+        endDate: '2026-10-31'
+      })
+      expect(getMonthDateRange(2026, 11)).toEqual({
+        startDate: '2026-11-01',
+        endDate: '2026-11-30'
+      })
+    })
+  })
+
+  describe('Account Status & Leadership Role Enforcement (validateAuthorizedProfile)', () => {
+    const baseProfile: UserProfile = {
+      id: 'usr-1',
+      fullName: 'Adebayo Oyewusi',
+      email: 'oyewusi.adebayo1@gmail.com',
+      roles: ['system_admin'],
+      accountStatus: 'active',
+      createdAt: '2026-10-18T00:00:00Z'
+    }
+
+    it('rejects null / missing user profiles', () => {
+      const res = validateAuthorizedProfile(null)
+      expect(res.authorized).toBe(false)
+      expect(res.error).toContain('No leadership profile found')
+    })
+
+    it('rejects deactivated and pending user accounts even if roles exist', () => {
+      const deactivated = validateAuthorizedProfile({ ...baseProfile, accountStatus: 'deactivated' })
+      expect(deactivated.authorized).toBe(false)
+      expect(deactivated.error).toContain('deactivated')
+
+      const pending = validateAuthorizedProfile({ ...baseProfile, accountStatus: 'pending' })
+      expect(pending.authorized).toBe(false)
+      expect(pending.error).toContain('pending')
+    })
+
+    it('rejects active accounts that have zero assigned leadership roles', () => {
+      const noRoles = validateAuthorizedProfile({ ...baseProfile, roles: [] })
+      expect(noRoles.authorized).toBe(false)
+      expect(noRoles.error).toContain('No active leadership roles')
+    })
+
+    it('authorizes active accounts with at least one valid leadership role', () => {
+      const ok = validateAuthorizedProfile(baseProfile)
+      expect(ok.authorized).toBe(true)
+      expect(ok.error).toBeUndefined()
+    })
+  })
+
+  describe('Terminal Session Metadata Lifecycle', () => {
+    beforeEach(() => {
+      attendanceService.clearStoredSession()
+    })
+
+    it('stores and clears volatile terminal session metadata cleanly', () => {
+      sessionStorage.setItem('ysaams_terminal_token', 'tok-abc')
+      sessionStorage.setItem('ysaams_terminal_session_id', 'sess-123')
+      sessionStorage.setItem('ysaams_terminal_id', 'term-456')
+      sessionStorage.setItem('ysaams_terminal_session_title', 'Obantoko Stake Gathering')
+      sessionStorage.setItem('ysaams_terminal_session_date', '2026-10-18')
+
+      const meta = attendanceService.getStoredSessionMetadata()
+      expect(meta.token).toBe('tok-abc')
+      expect(meta.sessionId).toBe('sess-123')
+      expect(meta.terminalId).toBe('term-456')
+      expect(meta.sessionTitle).toBe('Obantoko Stake Gathering')
+      expect(meta.sessionDate).toBe('2026-10-18')
+
+      attendanceService.clearStoredSession()
+      const cleared = attendanceService.getStoredSessionMetadata()
+      expect(cleared.token).toBeNull()
+      expect(cleared.sessionId).toBeNull()
+      expect(cleared.terminalId).toBeNull()
+      expect(cleared.sessionTitle).toBeNull()
+      expect(cleared.sessionDate).toBeNull()
+    })
+  })
 })
+
