@@ -60,23 +60,51 @@ export const adminService = {
 
   // --- User Profiles & Governance ---
   async listUsers(): Promise<UserProfile[]> {
-    const { data, error } = await supabase
-      .from('user_profiles')
-      .select('*, user_roles(role_name), user_unit_assignments(id, unit_id, assigned_role, stake_units(unit_name))')
-      .order('created_at', { ascending: false })
+    // Fetch profiles, roles, and unit assignments in parallel to avoid ambiguous
+    // PostgREST embedding errors caused by multiple foreign keys (user_id and assigned_by).
+    const [profilesRes, rolesRes, assignmentsRes] = await Promise.all([
+      supabase
+        .from('user_profiles')
+        .select('*')
+        .order('created_at', { ascending: false }),
+      supabase
+        .from('user_roles')
+        .select('user_id, role_name'),
+      supabase
+        .from('user_unit_assignments')
+        .select('id, user_id, unit_id, assigned_role, created_at, stake_units(unit_name)')
+    ])
 
-    if (error) throw new Error(error.message)
+    if (profilesRes.error) throw new Error(profilesRes.error.message)
+    if (rolesRes.error) throw new Error(rolesRes.error.message)
+    if (assignmentsRes.error) throw new Error(assignmentsRes.error.message)
 
-    return (data || []).map((u: any) => {
-      const roles = (u.user_roles || []).map((r: any) => r.role_name as AppRole)
-      const unitAssignments: UserUnitAssignment[] = (u.user_unit_assignments || []).map((ua: any) => ({
+    const rolesByUser: Record<string, AppRole[]> = {}
+    for (const r of rolesRes.data || []) {
+      if (!rolesByUser[r.user_id]) {
+        rolesByUser[r.user_id] = []
+      }
+      rolesByUser[r.user_id].push(r.role_name as AppRole)
+    }
+
+    const assignmentsByUser: Record<string, UserUnitAssignment[]> = {}
+    for (const ua of assignmentsRes.data || []) {
+      if (!assignmentsByUser[ua.user_id]) {
+        assignmentsByUser[ua.user_id] = []
+      }
+      assignmentsByUser[ua.user_id].push({
         id: ua.id,
-        userId: u.id,
+        userId: ua.user_id,
         unitId: ua.unit_id,
         assignedRole: ua.assigned_role,
-        unitName: ua.stake_units?.unit_name,
+        unitName: (ua as any).stake_units?.unit_name,
         createdAt: ua.created_at
-      }))
+      })
+    }
+
+    return (profilesRes.data || []).map((u: any) => {
+      const roles = rolesByUser[u.id] || []
+      const unitAssignments = assignmentsByUser[u.id] || []
 
       return {
         id: u.id,
@@ -101,10 +129,26 @@ export const adminService = {
     if (error) throw new Error(error.message)
   },
 
+  async updateUserFullName(userId: string, fullName: string): Promise<void> {
+    const cleanName = fullName.trim()
+    if (!cleanName) {
+      throw new Error('Full name cannot be empty.')
+    }
+    const { error } = await supabase
+      .from('user_profiles')
+      .update({ full_name: cleanName, updated_at: new Date().toISOString() })
+      .eq('id', userId)
+
+    if (error) throw new Error(error.message)
+  },
+
   async assignUserRole(userId: string, roleName: AppRole): Promise<void> {
     const { error } = await supabase
       .from('user_roles')
-      .insert({ user_id: userId, role_name: roleName })
+      .upsert(
+        { user_id: userId, role_name: roleName },
+        { onConflict: 'user_id,role_name', ignoreDuplicates: true }
+      )
 
     if (error) throw new Error(error.message)
   },
@@ -126,11 +170,14 @@ export const adminService = {
   ): Promise<void> {
     const { error } = await supabase
       .from('user_unit_assignments')
-      .insert({
-        user_id: userId,
-        unit_id: unitId,
-        assigned_role: assignedRole
-      })
+      .upsert(
+        {
+          user_id: userId,
+          unit_id: unitId,
+          assigned_role: assignedRole
+        },
+        { onConflict: 'user_id,unit_id,assigned_role', ignoreDuplicates: true }
+      )
 
     if (error) throw new Error(error.message)
   },

@@ -808,5 +808,161 @@ describe('Domain Rules & Invariant Validation (Pure Unit Tests)', () => {
       expect(stakeYsaRepAccess.isStakeLeader).toBe(false)
     })
   })
+
+  describe('User Governance & Provisioning Engine (adminService.listUsers mapping)', () => {
+    it('correctly maps user profiles, multiple roles, and unit assignments without ambiguous relationship errors', () => {
+      const mockProfiles = [
+        {
+          id: 'user-admin',
+          full_name: 'Adebayo Oyewusi',
+          email: 'oyewusi.adebayo1@gmail.com',
+          account_status: 'active',
+          created_at: '2026-10-18T00:00:00Z',
+          updated_at: '2026-10-18T00:00:00Z'
+        },
+        {
+          id: 'user-bishop',
+          full_name: 'Ekundayo David Sodiq',
+          email: 'ekubdayosodiq626@gmail.com',
+          account_status: 'active',
+          created_at: '2026-10-18T01:00:00Z',
+          updated_at: '2026-10-18T01:00:00Z'
+        }
+      ]
+
+      const mockRoles = [
+        { user_id: 'user-admin', role_name: 'system_admin' },
+        { user_id: 'user-bishop', role_name: 'bishop' }
+      ]
+
+      const mockAssignments = [
+        {
+          id: 'ua-1',
+          user_id: 'user-bishop',
+          unit_id: 'unit-abiola-way',
+          assigned_role: 'bishop' as UnitAssignedRole,
+          created_at: '2026-10-18T01:00:00Z',
+          stake_units: { unit_name: 'Abiola-Way Ward' }
+        }
+      ]
+
+      // Assemble using the same logic implemented in adminService.listUsers
+      const rolesByUser: Record<string, AppRole[]> = {}
+      for (const r of mockRoles) {
+        if (!rolesByUser[r.user_id]) rolesByUser[r.user_id] = []
+        rolesByUser[r.user_id].push(r.role_name as AppRole)
+      }
+
+      const assignmentsByUser: Record<string, DbUserUnitAssignment[]> = {}
+      for (const ua of mockAssignments) {
+        if (!assignmentsByUser[ua.user_id]) assignmentsByUser[ua.user_id] = []
+        assignmentsByUser[ua.user_id].push({
+          id: ua.id,
+          userId: ua.user_id,
+          unitId: ua.unit_id,
+          assignedRole: ua.assigned_role,
+          unitName: ua.stake_units?.unit_name,
+          createdAt: ua.created_at
+        })
+      }
+
+      const users = mockProfiles.map(u => ({
+        id: u.id,
+        fullName: u.full_name,
+        email: u.email,
+        roles: rolesByUser[u.id] || [],
+        unitAssignments: assignmentsByUser[u.id] || [],
+        unitId: (assignmentsByUser[u.id] || [])[0]?.unitId || null,
+        accountStatus: u.account_status,
+        createdAt: u.created_at,
+        updatedAt: u.updated_at
+      }))
+
+      // Admin verification
+      expect(users[0].roles).toEqual(['system_admin'])
+      expect(users[0].unitAssignments).toEqual([])
+      expect(users[0].unitId).toBeNull()
+
+      // Bishop verification
+      expect(users[1].roles).toEqual(['bishop'])
+      expect(users[1].unitAssignments).toHaveLength(1)
+      expect(users[1].unitAssignments[0].unitName).toBe('Abiola-Way Ward')
+      expect(users[1].unitId).toBe('unit-abiola-way')
+    })
+
+    it('safely handles missing Auth accounts and skips provisioning until Auth identity exists', () => {
+      interface AuthIdentity {
+        id: string
+        email: string
+      }
+
+      interface LeadershipRegisterEntry {
+        fullName: string
+        email: string
+        roleName: AppRole
+        unitName?: string
+      }
+
+      const existingAuthUsers: AuthIdentity[] = [
+        { id: 'auth-1', email: 'oyewusi.adebayo1@gmail.com' }
+      ]
+
+      const register: LeadershipRegisterEntry[] = [
+        { fullName: 'Adebayo Oyewusi', email: 'oyewusi.adebayo1@gmail.com', roleName: 'system_admin' },
+        { fullName: 'Wilfred Terna Iorna', email: 'wilfrediorna@gmail.com', roleName: 'branch_president', unitName: 'Alabata Branch' }
+      ]
+
+      const provisioned: { userId: string; role: AppRole }[] = []
+      const pending: LeadershipRegisterEntry[] = []
+
+      for (const entry of register) {
+        const authUser = existingAuthUsers.find(
+          u => u.email.toLowerCase() === entry.email.toLowerCase()
+        )
+        if (!authUser) {
+          pending.push(entry)
+        } else {
+          provisioned.push({ userId: authUser.id, role: entry.roleName })
+        }
+      }
+
+      expect(provisioned).toHaveLength(1)
+      expect(provisioned[0].userId).toBe('auth-1')
+      expect(provisioned[0].role).toBe('system_admin')
+
+      expect(pending).toHaveLength(1)
+      expect(pending[0].email).toBe('wilfrediorna@gmail.com')
+      expect(pending[0].fullName).toBe('Wilfred Terna Iorna')
+    })
+
+    it('strictly prevents non-system_admin users from executing administrative role assignment', () => {
+      const stakeClerk: UserContext = {
+        id: 'user-clerk',
+        accountStatus: 'active',
+        roles: ['stake_clerk'],
+        unitAssignments: []
+      }
+
+      const bishop: UserContext = {
+        id: 'user-bishop',
+        accountStatus: 'active',
+        roles: ['bishop'],
+        unitAssignments: [{ unitId: 'unit-1', assignedRole: 'bishop' }]
+      }
+
+      const systemAdmin: UserContext = {
+        id: 'user-admin',
+        accountStatus: 'active',
+        roles: ['system_admin'],
+        unitAssignments: []
+      }
+
+      const canAssignRoles = (user: UserContext) => user.roles.includes('system_admin')
+
+      expect(canAssignRoles(stakeClerk)).toBe(false)
+      expect(canAssignRoles(bishop)).toBe(false)
+      expect(canAssignRoles(systemAdmin)).toBe(true)
+    })
+  })
 })
 

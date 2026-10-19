@@ -45,7 +45,7 @@ Once the Auth identity exists for `oyewusi.adebayo1@gmail.com`, the following tr
 DO $$
 DECLARE
     v_admin_email TEXT := 'oyewusi.adebayo1@gmail.com';
-    v_admin_name  TEXT := 'Adebayo Babatunde Oyewusi';
+    v_admin_name  TEXT := 'Adebayo Oyewusi';
     v_user_id     UUID;
 BEGIN
     -- 1. Locate existing Auth identity
@@ -57,33 +57,41 @@ BEGIN
         RAISE EXCEPTION 'Auth user with email % not found. Please create the user in Supabase Auth first.', v_admin_email;
     END IF;
 
-    -- 2. Create or update user profile
+    -- 2. Create or update user profile (preserves existing Auth UUID)
     INSERT INTO public.user_profiles (id, full_name, email, account_status)
     VALUES (v_user_id, v_admin_name, v_admin_email, 'active')
     ON CONFLICT (id) DO UPDATE 
     SET full_name = EXCLUDED.full_name,
+        email = COALESCE(EXCLUDED.email, public.user_profiles.email),
         account_status = 'active',
         updated_at = timezone('utc'::text, now());
 
-    -- 3. Assign system_admin role
+    -- 3. Assign system_admin role idempotently
     INSERT INTO public.user_roles (user_id, role_name, assigned_by)
     VALUES (v_user_id, 'system_admin', v_user_id)
     ON CONFLICT (user_id, role_name) DO NOTHING;
 
-    -- 4. Record bootstrap in immutable audit log
-    INSERT INTO public.audit_logs (actor_id, action, target_record_id, target_table, outcome, metadata)
-    VALUES (
-        v_user_id,
-        'SYSTEM_ADMIN_BOOTSTRAP',
-        v_user_id::text,
-        'user_roles',
-        'success',
-        jsonb_build_object(
-            'email', v_admin_email,
-            'role', 'system_admin',
-            'timestamp', timezone('utc'::text, now())
-        )
-    );
+    -- 4. Record bootstrap in immutable audit log once
+    IF NOT EXISTS (
+        SELECT 1
+        FROM public.audit_logs
+        WHERE actor_id = v_user_id
+          AND action = 'SYSTEM_ADMIN_BOOTSTRAP'
+    ) THEN
+        INSERT INTO public.audit_logs (actor_id, action, target_record_id, target_table, outcome, metadata)
+        VALUES (
+            v_user_id,
+            'SYSTEM_ADMIN_BOOTSTRAP',
+            v_user_id::text,
+            'user_roles',
+            'success',
+            jsonb_build_object(
+                'email', v_admin_email,
+                'role', 'system_admin',
+                'timestamp', timezone('utc'::text, now())
+            )
+        );
+    END IF;
 
     RAISE NOTICE 'Successfully provisioned system_admin privileges for % (User ID: %)', v_admin_email, v_user_id;
 END $$;

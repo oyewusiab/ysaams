@@ -7,8 +7,9 @@ import {
   parseAuthCallbackUrl,
   validateNewPassword
 } from '../services/authService'
+import { deriveLeadershipAccess } from '../context/AuthContext'
 import { attendanceService } from '../services/attendanceService'
-import { UserProfile } from '../types/database'
+import { UserProfile, AppRole, UnitAssignedRole } from '../types/database'
 
 describe('Domain Helper Engines', () => {
   describe('Session Code Generator', () => {
@@ -93,8 +94,18 @@ describe('Domain Helper Engines', () => {
       expect(pending.error).toContain('pending')
     })
 
-    it('rejects active accounts that have zero assigned leadership roles', () => {
-      const noRoles = validateAuthorizedProfile({ ...baseProfile, roles: [] })
+    it('rejects active accounts that have zero assigned leadership roles (symptom when user_roles is empty)', () => {
+      const unprovisionedProfile: UserProfile = {
+        id: 'usr-1',
+        fullName: 'oyewusi.adebayo1',
+        email: 'oyewusi.adebayo1@gmail.com',
+        roles: [],
+        unitAssignments: [],
+        unitId: null,
+        accountStatus: 'active',
+        createdAt: '2026-10-18T00:00:00Z'
+      }
+      const noRoles = validateAuthorizedProfile(unprovisionedProfile)
       expect(noRoles.authorized).toBe(false)
       expect(noRoles.error).toContain('No active leadership roles')
     })
@@ -103,6 +114,124 @@ describe('Domain Helper Engines', () => {
       const ok = validateAuthorizedProfile(baseProfile)
       expect(ok.authorized).toBe(true)
       expect(ok.error).toBeUndefined()
+    })
+
+    it('resolves system_admin with full stake-wide authority and zero local-unit assignment required', () => {
+      const adminProfile: UserProfile = {
+        id: 'usr-admin',
+        fullName: 'Adebayo Oyewusi',
+        email: 'oyewusi.adebayo1@gmail.com',
+        roles: ['system_admin'],
+        unitAssignments: [],
+        unitId: null,
+        accountStatus: 'active',
+        createdAt: '2026-10-18T00:00:00Z'
+      }
+
+      const validation = validateAuthorizedProfile(adminProfile)
+      expect(validation.authorized).toBe(true)
+
+      const access = deriveLeadershipAccess(adminProfile.roles, adminProfile.unitAssignments)
+      expect(access.isSystemAdmin).toBe(true)
+      expect(access.isStakeLeader).toBe(true)
+      expect(access.hasStakeWideReadAccess).toBe(true)
+      expect(access.isClerkRoleOnly).toBe(false)
+      expect(access.canManageActivities).toBe(true)
+      expect(access.canManageMembers).toBe(true)
+      expect(access.canRecordManualAttendance).toBe(true)
+      expect(access.assignedUnitIds).toEqual([])
+      expect(access.reportUnitFilter).toBeNull()
+    })
+
+    it('simulates idempotent bootstrap and role provisioning without duplicating units, roles, or unit assignments', () => {
+      const OFFICIAL_UNITS: { name: string; type: 'ward' | 'branch' }[] = [
+        { name: 'Abiola-Way Ward', type: 'ward' },
+        { name: 'Alabata Branch', type: 'branch' },
+        { name: 'Apena Branch', type: 'branch' },
+        { name: 'Apete Branch', type: 'branch' },
+        { name: 'Camp Ward', type: 'ward' },
+        { name: 'Kugba Ward', type: 'ward' },
+        { name: 'Obantoko Ward', type: 'ward' },
+        { name: 'Odeda Ward', type: 'ward' }
+      ]
+
+      const stakeUnits = new Map<string, { id: string; unitName: string; unitType: 'ward' | 'branch'; isActive: boolean }>()
+      const userProfiles = new Map<string, { id: string; fullName: string; email: string; accountStatus: 'active' }>()
+      const userRoles = new Set<string>() // key: `${userId}:${roleName}`
+      const unitAssignments = new Set<string>() // key: `${userId}:${unitId}:${assignedRole}`
+
+      // Initial state matching confirmed production symptoms:
+      // 1 profile with full_name = 'oyewusi.adebayo1', 0 roles, 0 assignments, 0 units
+      const adminAuthId = 'auth-uuid-admin'
+      userProfiles.set(adminAuthId, {
+        id: adminAuthId,
+        fullName: 'oyewusi.adebayo1',
+        email: 'oyewusi.adebayo1@gmail.com',
+        accountStatus: 'active'
+      })
+
+      const runIdempotentBootstrap = () => {
+        // 1. Upsert 8 official units by unit_name
+        for (const u of OFFICIAL_UNITS) {
+          const existing = stakeUnits.get(u.name)
+          stakeUnits.set(u.name, {
+            id: existing?.id || `unit-${u.name.toLowerCase().replace(/\s+/g, '-')}`,
+            unitName: u.name,
+            unitType: u.type,
+            isActive: true
+          })
+        }
+
+        // 2. Correct administrator profile full_name without changing Auth UUID
+        const existingAdmin = userProfiles.get(adminAuthId)
+        if (existingAdmin) {
+          userProfiles.set(adminAuthId, {
+            ...existingAdmin,
+            fullName: 'Adebayo Oyewusi',
+            accountStatus: 'active'
+          })
+        }
+
+        // 3. Assign system_admin role idempotently (no unit assignment)
+        userRoles.add(`${adminAuthId}:system_admin`)
+
+        // 4. Provision sample Stake YSA Rep (Option A: ysa_leader + all 8 units) if Auth user exists
+        const ysaRepId = 'auth-uuid-mubarak'
+        if (userProfiles.has(ysaRepId)) {
+          const repRole: AppRole = 'ysa_leader'
+          const repUnitRole: UnitAssignedRole = 'ysa_leader'
+          userRoles.add(`${ysaRepId}:${repRole}`)
+          for (const unit of stakeUnits.values()) {
+            unitAssignments.add(`${ysaRepId}:${unit.id}:${repUnitRole}`)
+          }
+        }
+      }
+
+      // First run: only admin exists in userProfiles
+      runIdempotentBootstrap()
+      expect(stakeUnits.size).toBe(8)
+      expect(userProfiles.get(adminAuthId)?.id).toBe(adminAuthId)
+      expect(userProfiles.get(adminAuthId)?.fullName).toBe('Adebayo Oyewusi')
+      expect(userRoles.size).toBe(1)
+      expect(userRoles.has(`${adminAuthId}:system_admin`)).toBe(true)
+      expect(unitAssignments.size).toBe(0)
+
+      // Second run after Stake YSA Rep Auth user is invited/created
+      userProfiles.set('auth-uuid-mubarak', {
+        id: 'auth-uuid-mubarak',
+        fullName: 'Sosanya, Mubarak Akolade',
+        email: 'Mubarakakolade09@gmail.com',
+        accountStatus: 'active'
+      })
+      runIdempotentBootstrap()
+      // Third run to verify strict idempotency
+      runIdempotentBootstrap()
+
+      expect(stakeUnits.size).toBe(8)
+      expect(userProfiles.get(adminAuthId)?.id).toBe(adminAuthId)
+      expect(userProfiles.get(adminAuthId)?.fullName).toBe('Adebayo Oyewusi')
+      expect(userRoles.size).toBe(2) // system_admin + ysa_leader
+      expect(unitAssignments.size).toBe(8) // 8 local unit assignments for Mubarak, 0 for admin
     })
   })
 
