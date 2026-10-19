@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react'
+import { AlertCircle } from 'lucide-react'
 import { AuthProvider, useAuth } from './context/AuthContext'
 import { Navbar } from './components/layout/Navbar'
 import { PublicAttendanceView } from './components/public/PublicAttendanceView'
@@ -36,6 +37,12 @@ export function resolveLeadershipSubpath(path: string): LeadershipRoute {
     return 'dashboard'
   }
   const clean = path.replace(/^\/la\/?/, '').replace(/\/$/, '')
+
+  // Supported Route Aliases
+  if (clean === 'sessions') return 'activities'
+  if (clean === 'audit') return 'audit-logs'
+  if (clean === 'admin') return 'users'
+
   const validSubpaths: LeadershipRoute[] = [
     'dashboard',
     'activities',
@@ -50,7 +57,7 @@ export function resolveLeadershipSubpath(path: string): LeadershipRoute {
   if (validSubpaths.includes(clean as LeadershipRoute)) {
     return clean as LeadershipRoute
   }
-  return 'dashboard'
+  return 'not-found'
 }
 
 export function extractSessionCode(path: string): string | null {
@@ -148,22 +155,57 @@ export const AppContent: React.FC = () => {
   }
 
   // 3. Public Direct Link /:sessionCode or Root /
-  const initialCode = extractSessionCode(currentPath) || undefined
+  const initialCode = extractSessionCode(currentPath)
+  const isPublicRoot = currentPath === '/' || currentPath === ''
 
+  if (isPublicRoot || initialCode !== null) {
+    return (
+      <div className="min-h-screen flex flex-col bg-slate-950">
+        <Navbar currentPath={currentPath} onNavigate={navigateTo} />
+        <main className="flex-1">
+          <PublicAttendanceView
+            initialCode={initialCode || undefined}
+            onCodeRedeemed={(code, title, date) => {
+              setActiveTerminalCode(code)
+              if (title) setTerminalSessionTitle(title)
+              if (date) setTerminalSessionDate(date)
+              // Atomically scrub code from URL to clean /terminal path
+              navigateTo('/terminal')
+            }}
+          />
+        </main>
+      </div>
+    )
+  }
+
+  // 4. Unknown Top-Level Route (404 Not Found)
   return (
     <div className="min-h-screen flex flex-col bg-slate-950">
       <Navbar currentPath={currentPath} onNavigate={navigateTo} />
-      <main className="flex-1">
-        <PublicAttendanceView
-          initialCode={initialCode}
-          onCodeRedeemed={(code, title, date) => {
-            setActiveTerminalCode(code)
-            if (title) setTerminalSessionTitle(title)
-            if (date) setTerminalSessionDate(date)
-            // Atomically scrub code from URL to clean /terminal path
-            navigateTo('/terminal')
-          }}
-        />
+      <main className="flex-1 flex items-center justify-center p-6">
+        <div className="max-w-md w-full bg-slate-900 border border-slate-800 rounded-2xl p-8 text-center shadow-xl">
+          <div className="w-14 h-14 bg-red-950/60 border border-red-800/80 rounded-2xl flex items-center justify-center mx-auto mb-4 text-red-400">
+            <AlertCircle className="w-7 h-7" />
+          </div>
+          <h2 className="text-xl font-bold text-white mb-2">Page Not Found</h2>
+          <p className="text-sm text-slate-400 mb-6">
+            The requested page <code className="text-slate-300 bg-slate-950 px-1.5 py-0.5 rounded border border-slate-800 font-mono text-xs">{currentPath}</code> does not exist.
+          </p>
+          <div className="flex flex-col sm:flex-row gap-3 justify-center">
+            <button
+              onClick={() => navigateTo('/')}
+              className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl text-xs font-semibold transition"
+            >
+              Public Check-in
+            </button>
+            <button
+              onClick={() => navigateTo('/la')}
+              className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-semibold transition"
+            >
+              Leadership Portal
+            </button>
+          </div>
+        </div>
       </main>
     </div>
   )

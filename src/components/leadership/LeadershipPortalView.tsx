@@ -121,6 +121,11 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
   const [assignUserId, setAssignUserId] = useState('')
   const [assignRole, setAssignRole] = useState<AppRole>('ysa_leader')
   const [assignUnitId, setAssignUnitId] = useState('')
+  const [provName, setProvName] = useState('')
+  const [provEmail, setProvEmail] = useState('')
+  const [provRole, setProvRole] = useState<AppRole>('ysa_leader')
+  const [provUnitId, setProvUnitId] = useState('')
+  const [showProvForm, setShowProvForm] = useState(false)
 
   // 4. Member Census Form
   const [newMemberName, setNewMemberName] = useState('')
@@ -141,14 +146,32 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
   const [newSessTitle, setNewSessTitle] = useState('')
   const [newSessDate, setNewSessDate] = useState(() => new Date().toISOString().split('T')[0])
   const [newSessStartTime, setNewSessStartTime] = useState('16:00')
+  const [newSessEndTime, setNewSessEndTime] = useState('18:00')
+  const [newSessGraceMinutes, setNewSessGraceMinutes] = useState(0)
   const [newSessMaxTerminals, setNewSessMaxTerminals] = useState(2)
   const [newSessVisitorEnabled, setNewSessVisitorEnabled] = useState(true)
   const [newSessSelectedUnits, setNewSessSelectedUnits] = useState<string[]>([])
 
-  // 7. Initiate & Reopen Session State
+  // 7. Initiate, Reopen, Cancel, Postpone & Adjust Session State
   const [activeSessionCodes, setActiveSessionCodes] = useState<Record<string, string>>({})
   const [reopenReason, setReopenReason] = useState('')
   const [reopenSessionId, setReopenSessionId] = useState('')
+
+  const [cancelSessionId, setCancelSessionId] = useState('')
+  const [cancelReason, setCancelReason] = useState('')
+
+  const [postponeSessionId, setPostponeSessionId] = useState('')
+  const [postponeNewDate, setPostponeNewDate] = useState('')
+  const [postponeNewStartTime, setPostponeNewStartTime] = useState('')
+  const [postponeNewEndTime, setPostponeNewEndTime] = useState('')
+  const [postponeReason, setPostponeReason] = useState('')
+
+  const [adjustSessionId, setAdjustSessionId] = useState('')
+  const [adjustTitle, setAdjustTitle] = useState('')
+  const [adjustEndTime, setAdjustEndTime] = useState('')
+  const [adjustGraceMinutes, setAdjustGraceMinutes] = useState(0)
+  const [adjustSelectedUnits, setAdjustSelectedUnits] = useState<string[]>([])
+  const [adjustReason, setAdjustReason] = useState('')
 
   const unitFilter: string[] | null = reportUnitFilter
 
@@ -649,6 +672,8 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
         sessionTitle: newSessTitle,
         sessionDate: newSessDate,
         startTime: newSessStartTime,
+        scheduledEndTime: newSessEndTime || undefined,
+        gracePeriodMinutes: Number(newSessGraceMinutes) || 0,
         maxTerminals: clampedTerminals,
         visitorRegistrationEnabled: newSessVisitorEnabled,
         participatingUnits: newSessSelectedUnits.length > 0 ? newSessSelectedUnits : null
@@ -721,6 +746,87 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
       }
     } catch (err: any) {
       setStatusMsg({ type: 'error', text: err?.message || 'Failed to reopen session' })
+    }
+  }
+
+  const handleCancelSession = async (sessionId: string) => {
+    if (!canManageActivities) return
+    if (!cancelReason.trim() || cancelReason.trim().length < 5) {
+      setStatusMsg({ type: 'error', text: 'A cancellation reason of at least 5 characters is required.' })
+      return
+    }
+    try {
+      const res = await activityService.cancelSession(sessionId, cancelReason)
+      if (res.success) {
+        setCancelSessionId('')
+        setCancelReason('')
+        await loadCurrentSubpathData()
+        setStatusMsg({ type: 'success', text: 'Session cancelled and terminal codes revoked.' })
+      } else {
+        setStatusMsg({ type: 'error', text: res.error || 'Failed to cancel session' })
+      }
+    } catch (err: any) {
+      setStatusMsg({ type: 'error', text: err?.message || 'Failed to cancel session' })
+    }
+  }
+
+  const handlePostponeSession = async (sessionId: string) => {
+    if (!canManageActivities) return
+    if (!postponeNewDate || !postponeNewStartTime) {
+      setStatusMsg({ type: 'error', text: 'New session date and start time are required.' })
+      return
+    }
+    if (!postponeReason.trim() || postponeReason.trim().length < 5) {
+      setStatusMsg({ type: 'error', text: 'A postponement reason of at least 5 characters is required.' })
+      return
+    }
+    try {
+      const res = await activityService.postponeSession(
+        sessionId,
+        postponeNewDate,
+        postponeNewStartTime,
+        postponeNewEndTime || undefined,
+        postponeReason
+      )
+      if (res.success) {
+        setPostponeSessionId('')
+        setPostponeReason('')
+        setPostponeNewDate('')
+        setPostponeNewStartTime('')
+        setPostponeNewEndTime('')
+        await loadCurrentSubpathData()
+        setStatusMsg({ type: 'success', text: 'Session postponed and reset to draft with new schedule.' })
+      } else {
+        setStatusMsg({ type: 'error', text: res.error || 'Failed to postpone session' })
+      }
+    } catch (err: any) {
+      setStatusMsg({ type: 'error', text: err?.message || 'Failed to postpone session' })
+    }
+  }
+
+  const handleAdjustSession = async (sessionId: string) => {
+    if (!canManageActivities) return
+    if (!adjustReason.trim() || adjustReason.trim().length < 5) {
+      setStatusMsg({ type: 'error', text: 'A mandatory justification reason (at least 5 characters) is required for adjustments.' })
+      return
+    }
+    try {
+      const res = await activityService.adjustActiveSession(sessionId, adjustReason, {
+        title: adjustTitle.trim() || undefined,
+        scheduledEndTime: adjustEndTime || null,
+        gracePeriodMinutes: Number(adjustGraceMinutes) || 0,
+        participatingUnits: adjustSelectedUnits.length > 0 ? adjustSelectedUnits : null
+      })
+      if (res.success) {
+        setAdjustSessionId('')
+        setAdjustReason('')
+        await loadCurrentSubpathData()
+        setStatusMsg({ type: 'success', text: 'Active session adjustments applied and audited successfully.' })
+      } else {
+        setStatusMsg({ type: 'error', text: res.error || 'Failed to adjust session' })
+      }
+    } catch (err: any) {
+      setStatusMsg({ type: 'error', text: err?.message || 'Failed to adjust session' })
     }
   }
 
@@ -1068,7 +1174,7 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
                       className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-lg text-xs text-white"
                     />
                   </div>
-                  <div className="grid grid-cols-3 gap-2">
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                     <div>
                       <label className="block text-[11px] text-slate-300 uppercase mb-1">Date</label>
                       <input
@@ -1088,6 +1194,34 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
                       />
                     </div>
                     <div>
+                      <label className="block text-[11px] text-slate-300 uppercase mb-1">Scheduled End</label>
+                      <input
+                        type="time"
+                        value={newSessEndTime}
+                        onChange={(e) => setNewSessEndTime(e.target.value)}
+                        placeholder="Optional"
+                        className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-lg text-xs text-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] text-slate-300 uppercase mb-1">Grace Period</label>
+                      <select
+                        value={newSessGraceMinutes}
+                        onChange={(e) => setNewSessGraceMinutes(Number(e.target.value))}
+                        className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-lg text-xs text-white"
+                      >
+                        <option value={0}>Lock immediately</option>
+                        <option value={5}>5 minutes grace</option>
+                        <option value={10}>10 minutes grace</option>
+                        <option value={15}>15 minutes grace</option>
+                        <option value={30}>30 minutes grace</option>
+                        <option value={60}>60 minutes grace</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
                       <label className="block text-[11px] text-slate-300 uppercase mb-1">Max Terminals</label>
                       <input
                         type="number"
@@ -1098,6 +1232,14 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
                         className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-lg text-xs text-white"
                       />
                     </div>
+                    {newSessEndTime && (
+                      <div className="flex flex-col justify-end pb-1 text-[11px] text-emerald-400">
+                        <span>Server Lock Time:</span>
+                        <span className="font-mono text-white">
+                          {newSessEndTime} {newSessGraceMinutes > 0 ? `(+${newSessGraceMinutes}m grace)` : '(Immediate)'} WAT
+                        </span>
+                      </div>
+                    )}
                   </div>
 
                   {units.length > 0 && (
@@ -1160,7 +1302,7 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
                   <thead className="bg-slate-900 border-b border-slate-800 uppercase text-[10px] text-slate-400">
                     <tr>
                       <th className="px-4 py-3">Session</th>
-                      <th className="px-4 py-3">Date & Time</th>
+                      <th className="px-4 py-3">Date & Schedule</th>
                       <th className="px-4 py-3">Status</th>
                       <th className="px-4 py-3">Terminals</th>
                       <th className="px-4 py-3">Active Kiosk Code</th>
@@ -1180,13 +1322,29 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
                               </span>
                             )}
                           </td>
-                          <td className="px-4 py-3">{s.sessionDate} • {s.startTime}</td>
+                          <td className="px-4 py-3">
+                            <div>{s.sessionDate} • {s.startTime}</div>
+                            {s.scheduledEndTime && (
+                              <div className="text-[10px] text-slate-400">
+                                Lock: {s.scheduledEndTime} {s.gracePeriodMinutes ? `(+${s.gracePeriodMinutes}m)` : ''}
+                              </div>
+                            )}
+                          </td>
                           <td className="px-4 py-3">
                             <span className={`px-2 py-0.5 rounded text-[10px] uppercase font-semibold ${
-                              s.status === 'active' ? 'bg-emerald-950 text-emerald-400 border border-emerald-800' : 'bg-slate-800 text-slate-400'
+                              s.status === 'active'
+                                ? 'bg-emerald-950 text-emerald-400 border border-emerald-800'
+                                : s.status === 'cancelled'
+                                ? 'bg-red-950 text-red-400 border border-red-800'
+                                : 'bg-slate-800 text-slate-400'
                             }`}>
                               {s.status}
                             </span>
+                            {s.status === 'cancelled' && s.cancellationReason && (
+                              <div className="text-[10px] text-red-300 truncate max-w-[140px]" title={s.cancellationReason}>
+                                {s.cancellationReason}
+                              </div>
+                            )}
                           </td>
                           <td className="px-4 py-3">{s.maxTerminals} max</td>
                           <td className="px-4 py-3">
@@ -1213,28 +1371,76 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
                               <span className="text-[11px] text-slate-600">-</span>
                             )}
                           </td>
-                          <td className="px-4 py-3 text-right space-x-2">
+                          <td className="px-4 py-3 text-right space-x-1">
                             {canManageActivities && s.status === 'draft' && (
-                              <button
-                                onClick={() => handleInitiateSession(s)}
-                                className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-[11px] font-semibold"
-                              >
-                                Activate Code
-                              </button>
+                              <>
+                                <button
+                                  onClick={() => handleInitiateSession(s)}
+                                  className="px-2 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-[11px] font-semibold"
+                                >
+                                  Activate
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    setPostponeSessionId(s.id)
+                                    setPostponeNewDate(s.sessionDate)
+                                    setPostponeNewStartTime(s.startTime)
+                                    setPostponeNewEndTime(s.scheduledEndTime || '')
+                                  }}
+                                  className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded text-[11px] font-semibold"
+                                >
+                                  Postpone
+                                </button>
+                                <button
+                                  onClick={() => setCancelSessionId(s.id)}
+                                  className="px-2 py-1 bg-red-950 hover:bg-red-900 border border-red-800 text-red-300 rounded text-[11px] font-semibold"
+                                >
+                                  Cancel
+                                </button>
+                              </>
                             )}
                             {canManageActivities && s.status === 'active' && (
                               <>
                                 <button
                                   onClick={() => handleInitiateSession(s)}
-                                  className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded text-[11px] font-semibold"
+                                  className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded text-[11px] font-semibold"
                                 >
-                                  Rotate Code
+                                  Rotate
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    setAdjustSessionId(s.id)
+                                    setAdjustTitle(s.sessionTitle)
+                                    setAdjustEndTime(s.scheduledEndTime || '')
+                                    setAdjustGraceMinutes(s.gracePeriodMinutes || 0)
+                                    setAdjustSelectedUnits(s.participatingUnits || [])
+                                  }}
+                                  className="px-2 py-1 bg-blue-950 hover:bg-blue-900 border border-blue-800 text-blue-300 rounded text-[11px] font-semibold"
+                                >
+                                  Adjust
                                 </button>
                                 <button
                                   onClick={() => handleCloseSession(s.id)}
-                                  className="px-2.5 py-1 bg-red-950 hover:bg-red-900 border border-red-800 text-red-300 rounded text-[11px] font-semibold"
+                                  className="px-2 py-1 bg-red-950 hover:bg-red-900 border border-red-800 text-red-300 rounded text-[11px] font-semibold"
                                 >
-                                  Close Session
+                                  Close
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    setPostponeSessionId(s.id)
+                                    setPostponeNewDate(s.sessionDate)
+                                    setPostponeNewStartTime(s.startTime)
+                                    setPostponeNewEndTime(s.scheduledEndTime || '')
+                                  }}
+                                  className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded text-[11px] font-semibold"
+                                >
+                                  Postpone
+                                </button>
+                                <button
+                                  onClick={() => setCancelSessionId(s.id)}
+                                  className="px-2 py-1 bg-red-950 hover:bg-red-900 border border-red-800 text-red-300 rounded text-[11px] font-semibold"
+                                >
+                                  Cancel
                                 </button>
                               </>
                             )}
@@ -1258,6 +1464,160 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
                   </tbody>
                 </table>
               </div>
+
+              {/* Adjust Modal */}
+              {adjustSessionId && (
+                <div className="mt-4 p-4 bg-slate-950 border border-blue-800/60 rounded-xl space-y-3">
+                  <p className="text-xs font-semibold text-blue-400">Adjust Active Activity Session (Controlled Approval)</p>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                    <div>
+                      <label className="block text-[10px] text-slate-400 uppercase mb-1">Adjusted Title</label>
+                      <input
+                        type="text"
+                        value={adjustTitle}
+                        onChange={(e) => setAdjustTitle(e.target.value)}
+                        className="w-full px-3 py-1.5 bg-slate-900 border border-slate-800 rounded text-xs text-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] text-slate-400 uppercase mb-1">Scheduled End Time</label>
+                      <input
+                        type="time"
+                        value={adjustEndTime}
+                        onChange={(e) => setAdjustEndTime(e.target.value)}
+                        className="w-full px-3 py-1.5 bg-slate-900 border border-slate-800 rounded text-xs text-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] text-slate-400 uppercase mb-1">Grace Period</label>
+                      <select
+                        value={adjustGraceMinutes}
+                        onChange={(e) => setAdjustGraceMinutes(Number(e.target.value))}
+                        className="w-full px-3 py-1.5 bg-slate-900 border border-slate-800 rounded text-xs text-white"
+                      >
+                        <option value={0}>Lock immediately</option>
+                        <option value={5}>5 min grace</option>
+                        <option value={10}>10 min grace</option>
+                        <option value={15}>15 min grace</option>
+                        <option value={30}>30 min grace</option>
+                        <option value={60}>60 min grace</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-[10px] text-slate-400 uppercase mb-1">Mandatory Justification Reason (min 5 chars)</label>
+                    <input
+                      type="text"
+                      value={adjustReason}
+                      onChange={(e) => setAdjustReason(e.target.value)}
+                      placeholder="Enter operational reason for schedule or title adjustment..."
+                      className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded text-xs text-white"
+                    />
+                  </div>
+                  <div className="flex space-x-2">
+                    <button
+                      onClick={() => handleAdjustSession(adjustSessionId)}
+                      className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold rounded"
+                    >
+                      Authorize & Apply Adjustments
+                    </button>
+                    <button
+                      onClick={() => { setAdjustSessionId(''); setAdjustReason('') }}
+                      className="px-3 py-1.5 bg-slate-800 text-slate-300 text-xs rounded"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Postpone Modal */}
+              {postponeSessionId && (
+                <div className="mt-4 p-4 bg-slate-950 border border-slate-800 rounded-xl space-y-3">
+                  <p className="text-xs font-semibold text-slate-200">Postpone Scheduled Session</p>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                    <div>
+                      <label className="block text-[10px] text-slate-400 uppercase mb-1">New Date</label>
+                      <input
+                        type="date"
+                        value={postponeNewDate}
+                        onChange={(e) => setPostponeNewDate(e.target.value)}
+                        className="w-full px-3 py-1.5 bg-slate-900 border border-slate-800 rounded text-xs text-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] text-slate-400 uppercase mb-1">New Start Time</label>
+                      <input
+                        type="time"
+                        value={postponeNewStartTime}
+                        onChange={(e) => setPostponeNewStartTime(e.target.value)}
+                        className="w-full px-3 py-1.5 bg-slate-900 border border-slate-800 rounded text-xs text-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] text-slate-400 uppercase mb-1">New End Time (Optional)</label>
+                      <input
+                        type="time"
+                        value={postponeNewEndTime}
+                        onChange={(e) => setPostponeNewEndTime(e.target.value)}
+                        className="w-full px-3 py-1.5 bg-slate-900 border border-slate-800 rounded text-xs text-white"
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-[10px] text-slate-400 uppercase mb-1">Postponement Reason (min 5 chars)</label>
+                    <input
+                      type="text"
+                      value={postponeReason}
+                      onChange={(e) => setPostponeReason(e.target.value)}
+                      placeholder="e.g. Venue double-booked, rescheduled to next Saturday..."
+                      className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded text-xs text-white"
+                    />
+                  </div>
+                  <div className="flex space-x-2">
+                    <button
+                      onClick={() => handlePostponeSession(postponeSessionId)}
+                      className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold rounded"
+                    >
+                      Authorize Postponement
+                    </button>
+                    <button
+                      onClick={() => { setPostponeSessionId(''); setPostponeReason('') }}
+                      className="px-3 py-1.5 bg-slate-800 text-slate-300 text-xs rounded"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Cancel Modal */}
+              {cancelSessionId && (
+                <div className="mt-4 p-4 bg-slate-950 border border-red-800/60 rounded-xl space-y-2">
+                  <p className="text-xs font-semibold text-red-400">Cancel Activity Session (Terminal Codes Will Be Revoked)</p>
+                  <input
+                    type="text"
+                    value={cancelReason}
+                    onChange={(e) => setCancelReason(e.target.value)}
+                    placeholder="Enter reason for cancellation (required, min 5 chars)..."
+                    className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-lg text-xs text-white"
+                  />
+                  <div className="flex space-x-2">
+                    <button
+                      onClick={() => handleCancelSession(cancelSessionId)}
+                      className="px-3 py-1.5 bg-red-600 hover:bg-red-500 text-white text-xs font-semibold rounded"
+                    >
+                      Confirm Session Cancellation
+                    </button>
+                    <button
+                      onClick={() => { setCancelSessionId(''); setCancelReason('') }}
+                      className="px-3 py-1.5 bg-slate-800 text-slate-300 text-xs rounded"
+                    >
+                      Back
+                    </button>
+                  </div>
+                </div>
+              )}
 
               {/* Reopen Modal */}
               {reopenSessionId && (
@@ -1750,71 +2110,245 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
             ) : (
               <>
                 {isSystemAdmin ? (
-                  <form
-                    onSubmit={async (e) => {
-                      e.preventDefault()
-                      if (!assignUserId) return
-                      const unitRequiredRoles: AppRole[] = ['bishop', 'branch_president', 'ysa_leader', 'ward_clerk', 'branch_clerk']
-                      if (unitRequiredRoles.includes(assignRole) && !assignUnitId) {
-                        setStatusMsg({ type: 'error', text: `Selecting a target ward or branch is required when assigning "${assignRole}".` })
-                        return
-                      }
-                      try {
-                        await adminService.assignUserRole(assignUserId, assignRole)
-                        if (assignUnitId && unitRequiredRoles.includes(assignRole)) {
-                          await adminService.assignUserUnit(assignUserId, assignUnitId, assignRole as any)
+                  <div className="space-y-4">
+                    <div className="flex justify-between items-center bg-slate-900/60 border border-slate-800/80 p-3 rounded-xl">
+                      <div>
+                        <h4 className="text-xs font-semibold text-white">Leadership Role & Account Administration</h4>
+                        <p className="text-[11px] text-slate-400">Authorize roles for existing user profiles or provision newly invited leaders.</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setShowProvForm(!showProvForm)}
+                        className="inline-flex items-center px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition"
+                      >
+                        <UserCheck className="w-3.5 h-3.5 mr-1.5 text-emerald-400" />
+                        {showProvForm ? 'Hide Provisioning' : 'Provision User by Email'}
+                      </button>
+                    </div>
+
+                    {showProvForm && (
+                      <form
+                        onSubmit={async (e) => {
+                          e.preventDefault()
+                          try {
+                            const res = await adminService.provisionLeadershipUser(
+                              {
+                                fullName: provName,
+                                email: provEmail,
+                                role: provRole,
+                                unitId: provUnitId || undefined
+                              },
+                              units
+                            )
+                            setStatusMsg({ type: 'success', text: res.message })
+                            setProvName('')
+                            setProvEmail('')
+                            setProvUnitId('')
+                            setShowProvForm(false)
+                            await loadCurrentSubpathData()
+                          } catch (err: any) {
+                            setStatusMsg({ type: 'error', text: err?.message || 'Provisioning failed' })
+                          }
+                        }}
+                        className="bg-slate-900/80 border border-emerald-900/50 p-4 rounded-xl space-y-3"
+                      >
+                        <div className="flex items-center space-x-2 text-emerald-400 text-xs font-semibold">
+                          <UserCheck className="w-4 h-4" />
+                          <span>Provision New Leadership / Clerk Account</span>
+                        </div>
+                        <p className="text-[11px] text-slate-400">
+                          Configure leadership role and unit scope. Auth identities are managed securely server-side; once the user is invited or created in Supabase Auth, their profile is automatically bound and activated.
+                        </p>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 items-end">
+                          <div>
+                            <label className="block text-[11px] text-slate-300 uppercase mb-1">Full Name</label>
+                            <input
+                              type="text"
+                              required
+                              value={provName}
+                              onChange={(e) => setProvName(e.target.value)}
+                              placeholder="e.g. John Doe"
+                              className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-xs text-white"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[11px] text-slate-300 uppercase mb-1">Email Address</label>
+                            <input
+                              type="email"
+                              required
+                              value={provEmail}
+                              onChange={(e) => setProvEmail(e.target.value)}
+                              placeholder="leader@example.com"
+                              className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-xs text-white"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[11px] text-slate-300 uppercase mb-1">Role</label>
+                            <select
+                              value={provRole}
+                              onChange={(e) => {
+                                const newRole = e.target.value as AppRole
+                                setProvRole(newRole)
+                                if (['stake_clerk', 'stake_presidency', 'system_admin'].includes(newRole)) {
+                                  setProvUnitId('')
+                                }
+                              }}
+                              className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-xs text-white"
+                            >
+                              <option value="ysa_leader">YSA Leader</option>
+                              <option value="bishop">Bishop</option>
+                              <option value="branch_president">Branch President</option>
+                              <option value="ward_clerk">Ward Clerk</option>
+                              <option value="branch_clerk">Branch Clerk</option>
+                              <option value="stake_clerk">Stake Clerk</option>
+                              <option value="stake_presidency">Stake Presidency</option>
+                              <option value="system_admin">System Admin</option>
+                            </select>
+                          </div>
+                          <div>
+                            <label className="block text-[11px] text-slate-300 uppercase mb-1">Unit Assignment</label>
+                            <select
+                              value={provUnitId}
+                              onChange={(e) => setProvUnitId(e.target.value)}
+                              disabled={['stake_clerk', 'stake_presidency', 'system_admin'].includes(provRole)}
+                              className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-xs text-white disabled:opacity-50"
+                            >
+                              {['stake_clerk', 'stake_presidency', 'system_admin'].includes(provRole) ? (
+                                <option value="">Stake Wide (All Units)</option>
+                              ) : provRole === 'ysa_leader' ? (
+                                <>
+                                  <option value="">Select Scope</option>
+                                  <option value="all">All Stake Units (Approved YSA Scope)</option>
+                                  {units.map(u => <option key={u.id} value={u.id}>{u.unitName} ({u.unitType})</option>)}
+                                </>
+                              ) : (provRole === 'bishop' || provRole === 'ward_clerk') ? (
+                                <>
+                                  <option value="">Select Ward</option>
+                                  {units.filter(u => u.unitType === 'ward').map(u => <option key={u.id} value={u.id}>{u.unitName}</option>)}
+                                </>
+                              ) : (
+                                <>
+                                  <option value="">Select Branch</option>
+                                  {units.filter(u => u.unitType === 'branch').map(u => <option key={u.id} value={u.id}>{u.unitName}</option>)}
+                                </>
+                              )}
+                            </select>
+                          </div>
+                        </div>
+                        <div className="flex justify-end pt-1">
+                          <button
+                            type="submit"
+                            className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold"
+                          >
+                            Provision Leadership Account
+                          </button>
+                        </div>
+                      </form>
+                    )}
+
+                    <form
+                      onSubmit={async (e) => {
+                        e.preventDefault()
+                        if (!assignUserId) return
+                        const unitRequiredRoles: AppRole[] = ['bishop', 'branch_president', 'ysa_leader', 'ward_clerk', 'branch_clerk']
+                        if (unitRequiredRoles.includes(assignRole) && !assignUnitId) {
+                          setStatusMsg({ type: 'error', text: `Selecting a target ward, branch, or all-unit scope is required when assigning "${assignRole}".` })
+                          return
                         }
-                        await loadCurrentSubpathData()
-                        setStatusMsg({ type: 'success', text: 'Role and unit assignment saved.' })
-                      } catch (err: any) {
-                        setStatusMsg({ type: 'error', text: err?.message || 'Assignment failed' })
-                      }
-                    }}
-                    className="bg-slate-950 border border-slate-800 p-4 rounded-xl flex flex-wrap gap-3 items-end"
-                  >
-                    <div className="flex-1 min-w-[200px]">
-                      <label className="block text-[11px] text-slate-300 uppercase mb-1">Leader User</label>
-                      <select
-                        value={assignUserId}
-                        onChange={(e) => setAssignUserId(e.target.value)}
-                        className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-lg text-xs text-white"
-                      >
-                        <option value="">Select User Profile</option>
-                        {usersList.map(u => <option key={u.id} value={u.id}>{u.fullName} ({u.email})</option>)}
-                      </select>
-                    </div>
-                    <div className="w-44">
-                      <label className="block text-[11px] text-slate-300 uppercase mb-1">Assign Role</label>
-                      <select
-                        value={assignRole}
-                        onChange={(e) => setAssignRole(e.target.value as any)}
-                        className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-lg text-xs text-white"
-                      >
-                        <option value="ysa_leader">YSA Leader</option>
-                        <option value="bishop">Bishop</option>
-                        <option value="branch_president">Branch President</option>
-                        <option value="ward_clerk">Ward Clerk</option>
-                        <option value="branch_clerk">Branch Clerk</option>
-                        <option value="stake_clerk">Stake Clerk</option>
-                        <option value="stake_presidency">Stake Presidency</option>
-                        <option value="system_admin">System Admin</option>
-                      </select>
-                    </div>
-                    <div className="w-44">
-                      <label className="block text-[11px] text-slate-300 uppercase mb-1">Assign Unit</label>
-                      <select
-                        value={assignUnitId}
-                        onChange={(e) => setAssignUnitId(e.target.value)}
-                        className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-lg text-xs text-white"
-                      >
-                        <option value="">None / Stake Wide</option>
-                        {units.map(u => <option key={u.id} value={u.id}>{u.unitName}</option>)}
-                      </select>
-                    </div>
-                    <button type="submit" className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold">
-                      Authorize Role
-                    </button>
-                  </form>
+                        const selectedUnit = units.find(u => u.id === assignUnitId)
+                        if (assignUnitId !== 'all') {
+                          if ((assignRole === 'bishop' || assignRole === 'ward_clerk') && selectedUnit && selectedUnit.unitType !== 'ward') {
+                            setStatusMsg({ type: 'error', text: `${assignRole === 'bishop' ? 'Bishop' : 'Ward Clerk'} role must be assigned to a Ward, not a Branch.` })
+                            return
+                          }
+                          if ((assignRole === 'branch_president' || assignRole === 'branch_clerk') && selectedUnit && selectedUnit.unitType !== 'branch') {
+                            setStatusMsg({ type: 'error', text: `${assignRole === 'branch_president' ? 'Branch President' : 'Branch Clerk'} role must be assigned to a Branch, not a Ward.` })
+                            return
+                          }
+                        }
+                        try {
+                          await adminService.assignUserRole(assignUserId, assignRole)
+                          if (assignRole === 'ysa_leader' && assignUnitId === 'all') {
+                            await adminService.assignYsaLeaderAllUnits(assignUserId, units)
+                          } else if (assignUnitId && assignUnitId !== 'all' && unitRequiredRoles.includes(assignRole)) {
+                            await adminService.assignUserUnit(assignUserId, assignUnitId, assignRole as any)
+                          }
+                          await loadCurrentSubpathData()
+                          setStatusMsg({ type: 'success', text: 'Role and unit assignment saved.' })
+                        } catch (err: any) {
+                          setStatusMsg({ type: 'error', text: err?.message || 'Assignment failed' })
+                        }
+                      }}
+                      className="bg-slate-950 border border-slate-800 p-4 rounded-xl flex flex-wrap gap-3 items-end"
+                    >
+                      <div className="flex-1 min-w-[200px]">
+                        <label className="block text-[11px] text-slate-300 uppercase mb-1">Existing Leader Profile</label>
+                        <select
+                          value={assignUserId}
+                          onChange={(e) => setAssignUserId(e.target.value)}
+                          className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-lg text-xs text-white"
+                        >
+                          <option value="">Select User Profile</option>
+                          {usersList.map(u => <option key={u.id} value={u.id}>{u.fullName} ({u.email})</option>)}
+                        </select>
+                      </div>
+                      <div className="w-44">
+                        <label className="block text-[11px] text-slate-300 uppercase mb-1">Assign Role</label>
+                        <select
+                          value={assignRole}
+                          onChange={(e) => {
+                            const newRole = e.target.value as any
+                            setAssignRole(newRole)
+                            if (['stake_clerk', 'stake_presidency', 'system_admin'].includes(newRole)) {
+                              setAssignUnitId('')
+                            }
+                          }}
+                          className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-lg text-xs text-white"
+                        >
+                          <option value="ysa_leader">YSA Leader</option>
+                          <option value="bishop">Bishop</option>
+                          <option value="branch_president">Branch President</option>
+                          <option value="ward_clerk">Ward Clerk</option>
+                          <option value="branch_clerk">Branch Clerk</option>
+                          <option value="stake_clerk">Stake Clerk</option>
+                          <option value="stake_presidency">Stake Presidency</option>
+                          <option value="system_admin">System Admin</option>
+                        </select>
+                      </div>
+                      <div className="w-48">
+                        <label className="block text-[11px] text-slate-300 uppercase mb-1">Assign Unit</label>
+                        <select
+                          value={assignUnitId}
+                          onChange={(e) => setAssignUnitId(e.target.value)}
+                          disabled={['stake_clerk', 'stake_presidency', 'system_admin'].includes(assignRole)}
+                          className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-lg text-xs text-white disabled:opacity-50"
+                        >
+                          {['stake_clerk', 'stake_presidency', 'system_admin'].includes(assignRole) ? (
+                            <option value="">Stake Wide / None</option>
+                          ) : assignRole === 'ysa_leader' ? (
+                            <>
+                              <option value="">None / Specific Unit</option>
+                              <option value="all">All Stake Units (Approved YSA Scope)</option>
+                              {units.map(u => <option key={u.id} value={u.id}>{u.unitName} ({u.unitType})</option>)}
+                            </>
+                          ) : (assignRole === 'bishop' || assignRole === 'ward_clerk') ? (
+                            <>
+                              <option value="">Select Ward</option>
+                              {units.filter(u => u.unitType === 'ward').map(u => <option key={u.id} value={u.id}>{u.unitName}</option>)}
+                            </>
+                          ) : (
+                            <>
+                              <option value="">Select Branch</option>
+                              {units.filter(u => u.unitType === 'branch').map(u => <option key={u.id} value={u.id}>{u.unitName}</option>)}
+                            </>
+                          )}
+                        </select>
+                      </div>
+                      <button type="submit" className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold">
+                        Authorize Role
+                      </button>
+                    </form>
+                  </div>
                 ) : (
                   <div className="p-3.5 bg-slate-950 border border-slate-800 rounded-xl text-xs text-slate-400">
                     Read-only directory view. Assigning or revoking leadership roles and account status requires `system_admin` authority.
@@ -2051,6 +2585,25 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
                 )}
               </div>
             </div>
+          </div>
+        )}
+
+        {/* 10. NOT FOUND VIEW */}
+        {currentSubpath === 'not-found' && (
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-10 text-center max-w-lg mx-auto my-12 shadow-xl">
+            <div className="w-14 h-14 bg-red-950/60 border border-red-800/80 rounded-2xl flex items-center justify-center mx-auto mb-4 text-red-400">
+              <AlertCircle className="w-7 h-7" />
+            </div>
+            <h2 className="text-lg font-bold text-white mb-2">Leadership Module Not Found</h2>
+            <p className="text-xs text-slate-400 mb-6 leading-relaxed">
+              The requested leadership subpath does not exist or may have been relocated.
+            </p>
+            <button
+              onClick={() => onNavigateSubpath('dashboard')}
+              className="inline-flex items-center px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-semibold transition"
+            >
+              Return to Dashboard
+            </button>
           </div>
         )}
       </div>

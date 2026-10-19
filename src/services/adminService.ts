@@ -9,6 +9,118 @@ export interface ProvisionUserParams {
   unitAssignments?: { unitId: string; role: UnitAssignedRole }[]
 }
 
+export interface ProvisionUserRequest {
+  fullName: string
+  email: string
+  role: AppRole
+  unitId?: string | 'all'
+}
+
+export interface ProvisioningValidationResult {
+  valid: boolean
+  error?: string
+  validatedUnitId?: string
+  allUnits?: boolean
+}
+
+export function validateProvisioningInput(
+  request: ProvisionUserRequest,
+  availableUnits: StakeUnit[] = []
+): ProvisioningValidationResult {
+  const cleanName = request.fullName ? request.fullName.trim() : ''
+  if (!cleanName || cleanName.length < 2) {
+    return { valid: false, error: 'Full name must be at least 2 characters long.' }
+  }
+
+  const cleanEmail = request.email ? request.email.trim().toLowerCase() : ''
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+  if (!cleanEmail || !emailRegex.test(cleanEmail)) {
+    return { valid: false, error: 'A valid email address is required.' }
+  }
+
+  const role = request.role
+  const validRoles: AppRole[] = [
+    'system_admin',
+    'ysa_leader',
+    'stake_presidency',
+    'bishop',
+    'branch_president',
+    'stake_clerk',
+    'ward_clerk',
+    'branch_clerk'
+  ]
+  if (!validRoles.includes(role)) {
+    return { valid: false, error: `Invalid role "${role}".` }
+  }
+
+  // Unit-required roles
+  if (role === 'bishop' || role === 'ward_clerk') {
+    if (!request.unitId || request.unitId === 'all') {
+      return {
+        valid: false,
+        error: `Selecting an active Ward is required for ${role === 'bishop' ? 'Bishops' : 'Ward Clerks'}.`
+      }
+    }
+    const unit = availableUnits.find(u => u.id === request.unitId)
+    if (!unit) {
+      return { valid: false, error: 'Selected ward unit could not be found.' }
+    }
+    if (unit.unitType !== 'ward') {
+      return {
+        valid: false,
+        error: `${role === 'bishop' ? 'Bishop' : 'Ward Clerk'} role must be assigned to a Ward, not a Branch.`
+      }
+    }
+    if (!unit.isActive) {
+      return { valid: false, error: 'Cannot assign leadership roles to an inactive unit.' }
+    }
+    return { valid: true, validatedUnitId: unit.id }
+  }
+
+  if (role === 'branch_president' || role === 'branch_clerk') {
+    if (!request.unitId || request.unitId === 'all') {
+      return {
+        valid: false,
+        error: `Selecting an active Branch is required for ${role === 'branch_president' ? 'Branch Presidents' : 'Branch Clerks'}.`
+      }
+    }
+    const unit = availableUnits.find(u => u.id === request.unitId)
+    if (!unit) {
+      return { valid: false, error: 'Selected branch unit could not be found.' }
+    }
+    if (unit.unitType !== 'branch') {
+      return {
+        valid: false,
+        error: `${role === 'branch_president' ? 'Branch President' : 'Branch Clerk'} role must be assigned to a Branch, not a Ward.`
+      }
+    }
+    if (!unit.isActive) {
+      return { valid: false, error: 'Cannot assign leadership roles to an inactive unit.' }
+    }
+    return { valid: true, validatedUnitId: unit.id }
+  }
+
+  if (role === 'ysa_leader') {
+    if (request.unitId === 'all') {
+      return { valid: true, allUnits: true }
+    }
+    if (request.unitId) {
+      const unit = availableUnits.find(u => u.id === request.unitId)
+      if (!unit) {
+        return { valid: false, error: 'Selected unit could not be found.' }
+      }
+      if (!unit.isActive) {
+        return { valid: false, error: 'Cannot assign YSA leader to an inactive unit.' }
+      }
+      return { valid: true, validatedUnitId: unit.id }
+    }
+    return { valid: true }
+  }
+
+  // Stake-wide roles
+  return { valid: true }
+}
+
 export const adminService = {
   // --- Stake Units ---
   async listUnits(): Promise<StakeUnit[]> {
@@ -211,5 +323,78 @@ export const adminService = {
       metadata: a.metadata || {},
       createdAt: a.created_at
     }))
+  },
+
+  // --- Approved All-Unit Assignments for YSA Leaders ---
+  async assignYsaLeaderAllUnits(userId: string, units: StakeUnit[]): Promise<void> {
+    const activeUnits = units.filter(u => u.isActive)
+    for (const u of activeUnits) {
+      await this.assignUserUnit(userId, u.id, 'ysa_leader')
+    }
+  },
+
+  // --- Secure Leadership Account Provisioning ---
+  async provisionLeadershipUser(
+    request: ProvisionUserRequest,
+    availableUnits: StakeUnit[]
+  ): Promise<{ success: boolean; message: string; userId?: string }> {
+    const validation = validateProvisioningInput(request, availableUnits)
+    if (!validation.valid) {
+      throw new Error(validation.error || 'Invalid provisioning request.')
+    }
+
+    const cleanEmail = request.email.trim().toLowerCase()
+    const cleanName = request.fullName.trim()
+
+    // 1. Locate existing User Profile in public.user_profiles
+    const { data: existingProfile, error: profileErr } = await supabase
+      .from('user_profiles')
+      .select('id, full_name, email, account_status')
+      .ilike('email', cleanEmail)
+      .maybeSingle()
+
+    if (profileErr) {
+      throw new Error(`Profile lookup failed: ${profileErr.message}`)
+    }
+
+    if (!existingProfile) {
+      // Architectural security invariant:
+      // Creating Supabase Auth identities requires server-side service_role credentials
+      // that must NEVER be exposed in client code or browser runtime.
+      throw new Error(
+        `No Auth identity exists for "${cleanEmail}". To protect secrets, please invite this user via Supabase Auth (Authentication > Users > Invite user). Once created, the database sync trigger will provision their profile, and this role assignment will succeed.`
+      )
+    }
+
+    const targetUserId = existingProfile.id
+
+    // 2. Update full name if different
+    if (existingProfile.full_name !== cleanName) {
+      await this.updateUserFullName(targetUserId, cleanName)
+    }
+
+    // 3. Ensure account status is active
+    if (existingProfile.account_status !== 'active') {
+      await this.updateUserStatus(targetUserId, 'active')
+    }
+
+    // 4. Assign role idempotently
+    await this.assignUserRole(targetUserId, request.role)
+
+    // 5. Assign unit(s) if applicable
+    const unitRequiredRoles: AppRole[] = ['bishop', 'branch_president', 'ysa_leader', 'ward_clerk', 'branch_clerk']
+    if (unitRequiredRoles.includes(request.role)) {
+      if (validation.allUnits && request.role === 'ysa_leader') {
+        await this.assignYsaLeaderAllUnits(targetUserId, availableUnits)
+      } else if (validation.validatedUnitId) {
+        await this.assignUserUnit(targetUserId, validation.validatedUnitId, request.role as UnitAssignedRole)
+      }
+    }
+
+    return {
+      success: true,
+      userId: targetUserId,
+      message: `Successfully provisioned role "${request.role}" for ${cleanName}.`
+    }
   }
 }

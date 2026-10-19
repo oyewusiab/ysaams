@@ -37,9 +37,16 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
   const [statusMessage, setStatusMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
 
-  // Load active units, members (when authenticated), and ensure terminal heartbeat loop is active
+  // Load participating units, and ensure terminal heartbeat loop is active
   useEffect(() => {
-    adminService.listUnits().then(setUnits).catch(() => {})
+    const meta = attendanceService.getStoredSessionMetadata()
+    adminService.listUnits().then((allUnits) => {
+      if (meta.participatingUnits && meta.participatingUnits.length > 0) {
+        setUnits(allUnits.filter((u) => u.isActive && meta.participatingUnits!.includes(u.id)))
+      } else {
+        setUnits(allUnits.filter((u) => u.isActive))
+      }
+    }).catch(() => {})
     memberService.listMembers().then(setMembers).catch(() => {})
 
     const token = attendanceService.getStoredTerminalToken()
@@ -58,7 +65,7 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
     }
   }, [onReleaseTerminal])
 
-  // Filter or query members when unit is chosen or name is typed
+  // Query suggestions from previously recorded attendance names and census
   useEffect(() => {
     if (isNonMember) {
       setFilteredMembers([])
@@ -70,31 +77,26 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
     const q = attendeeName.trim()
 
     const resolveSuggestions = async () => {
-      // 1. Try local census if already loaded (authenticated leader kiosk)
-      if (members.length > 0) {
-        let list = members.filter(m => m.isActive)
-        if (selectedUnit) {
-          list = list.filter(m => m.homeUnitId === selectedUnit)
+      if (sessionId && (q.length >= 2 || selectedUnit)) {
+        const rpcResults = await attendanceService.searchTerminalSuggestions(sessionId, selectedUnit || null, q)
+        if (!cancelled) {
+          setFilteredMembers(rpcResults.slice(0, 8))
         }
-        if (q.length > 1) {
+      } else if (members.length > 0 && (q.length >= 2 || selectedUnit)) {
+        let list = members.filter((m) => m.isActive)
+        if (selectedUnit) {
+          list = list.filter((m) => m.homeUnitId === selectedUnit)
+        }
+        if (q.length >= 2) {
           const lower = q.toLowerCase()
           list = list.filter(
-            m =>
+            (m) =>
               m.fullName.toLowerCase().includes(lower) ||
               (m.preferredName && m.preferredName.toLowerCase().includes(lower))
           )
         }
         if (!cancelled) {
-          setFilteredMembers(list.slice(0, 6))
-        }
-        return
-      }
-
-      // 2. Otherwise use token-validated terminal member lookup RPC
-      if (sessionId && (q.length >= 2 || selectedUnit)) {
-        const rpcResults = await attendanceService.searchTerminalMembers(sessionId, selectedUnit || null, q)
-        if (!cancelled) {
-          setFilteredMembers(rpcResults.slice(0, 6))
+          setFilteredMembers(list.slice(0, 8))
         }
       } else if (!cancelled) {
         setFilteredMembers([])
@@ -137,44 +139,13 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
     setIsSubmitting(true)
     setStatusMessage(null)
 
-    // For church members, resolve memberId from selection, local list, or token-validated RPC search
-    let memberId = selectedMemberId
-    if (!isNonMember && !memberId) {
-      const lowerName = attendeeName.trim().toLowerCase()
-      const localMatch = members.find(
-        m =>
-          m.isActive &&
-          m.homeUnitId === selectedUnit &&
-          (m.fullName.toLowerCase() === lowerName || (m.preferredName && m.preferredName.toLowerCase() === lowerName))
-      )
-      if (localMatch) {
-        memberId = localMatch.id
-      } else {
-        const rpcMatches = await attendanceService.searchTerminalMembers(sessionId, selectedUnit, attendeeName.trim())
-        const exactRpc = rpcMatches.find(
-          m =>
-            m.homeUnitId === selectedUnit &&
-            (m.fullName.toLowerCase() === lowerName || (m.preferredName && m.preferredName.toLowerCase() === lowerName))
-        )
-        if (exactRpc) {
-          memberId = exactRpc.id
-        }
-      }
-    }
-
-    if (!isNonMember && !memberId) {
-      setIsSubmitting(false)
-      setStatusMessage({
-        type: 'error',
-        text: 'Member record not found in census for the selected unit. Please select from the member suggestions or register as a visitor.'
-      })
-      return
-    }
-
+    // For church members who selected a suggestion, use that selectedMemberId.
+    // If typing a brand-new name without prior registration, selectedMemberId is null,
+    // and the backend records attendance directly (Requirement A).
     const res = await attendanceService.recordAttendance({
       sessionId,
       attendeeName: attendeeName.trim(),
-      memberId: memberId || undefined,
+      memberId: selectedMemberId || undefined,
       isNonMember,
       unitId: selectedUnit || null,
       contactPhone: contactPhone.trim() || undefined

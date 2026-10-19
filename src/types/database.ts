@@ -86,8 +86,10 @@ export interface ActivitySession {
   sessionDate: string
   startTime: string
   scheduledEndTime?: string | null
+  gracePeriodMinutes?: number
+  effectiveLockAt?: string | null
   timezone: string
-  status: 'draft' | 'active' | 'closed'
+  status: 'draft' | 'active' | 'closed' | 'cancelled'
   maxTerminals: number
   codeHash?: string | null
   codeExpiresAt?: string | null
@@ -97,8 +99,33 @@ export interface ActivitySession {
   initiatedAt?: string | null
   closedAt?: string | null
   closedBy?: string | null
+  cancelledAt?: string | null
+  cancelledBy?: string | null
+  cancellationReason?: string | null
+  postponedAt?: string | null
+  postponedBy?: string | null
+  postponementReason?: string | null
   createdAt: string
   updatedAt?: string
+}
+
+export interface SessionAdjustmentRequest {
+  id: string
+  sessionId: string
+  requestedBy: string
+  reason: string
+  changes: Record<string, { before: any; after: any }>
+  status: 'pending' | 'approved' | 'rejected'
+  authorizedBy?: string | null
+  authorizedAt?: string | null
+  createdAt: string
+}
+
+export interface TerminalSuggestion {
+  id?: string | null
+  fullName: string
+  homeUnitId: string
+  homeUnitName: string
 }
 
 export interface TerminalAuthorization {
@@ -158,3 +185,4 @@ export type LeadershipRoute =
   | 'users'
   | 'settings'
   | 'audit-logs'
+  | 'not-found'

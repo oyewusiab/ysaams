@@ -38,13 +38,41 @@ export interface CreateSessionParams {
   sessionDate: string
   startTime: string
   scheduledEndTime?: string
+  gracePeriodMinutes?: number
   maxTerminals: number
   participatingUnits?: string[] | null
   visitorRegistrationEnabled?: boolean
 }
 
+/**
+ * Pure helper to calculate the effective lock time in Africa/Lagos (WAT, UTC+1).
+ * Returns ISO string or null if no scheduled end time is set.
+ */
+export function calculateEffectiveLockTime(
+  sessionDate: string,
+  scheduledEndTime?: string | null,
+  gracePeriodMinutes = 0,
+  _timezone = 'Africa/Lagos'
+): string | null {
+  if (!scheduledEndTime || !scheduledEndTime.trim()) return null
+  try {
+    const [year, month, day] = sessionDate.split('-').map(Number)
+    const [hours, minutes] = scheduledEndTime.split(':').map(Number)
+    if (isNaN(year) || isNaN(month) || isNaN(day) || isNaN(hours) || isNaN(minutes)) {
+      return null
+    }
+    // Africa/Lagos is West Africa Time (UTC+1, no DST)
+    const baseUtcMs = Date.UTC(year, month - 1, day, hours - 1, minutes)
+    const effectiveMs = baseUtcMs + Math.max(0, gracePeriodMinutes || 0) * 60 * 1000
+    return new Date(effectiveMs).toISOString()
+  } catch {
+    return null
+  }
+}
+
 export const activityService = {
   generateCode: generateSessionCode,
+  calculateEffectiveLockTime,
 
   async listActivities(): Promise<ActivityDefinition[]> {
     const { data, error } = await supabase
@@ -104,6 +132,8 @@ export const activityService = {
       sessionDate: s.session_date,
       startTime: s.start_time,
       scheduledEndTime: s.scheduled_end_time,
+      gracePeriodMinutes: s.grace_period_minutes || 0,
+      effectiveLockAt: calculateEffectiveLockTime(s.session_date, s.scheduled_end_time, s.grace_period_minutes, s.timezone),
       timezone: s.timezone,
       status: s.status,
       maxTerminals: s.max_terminals,
@@ -115,6 +145,12 @@ export const activityService = {
       initiatedAt: s.initiated_at,
       closedAt: s.closed_at,
       closedBy: s.closed_by,
+      cancelledAt: s.cancelled_at,
+      cancelledBy: s.cancelled_by,
+      cancellationReason: s.cancellation_reason,
+      postponedAt: s.postponed_at,
+      postponedBy: s.postponed_by,
+      postponementReason: s.postponement_reason,
       createdAt: s.created_at,
       updatedAt: s.updated_at
     }))
@@ -129,6 +165,7 @@ export const activityService = {
         session_date: params.sessionDate,
         start_time: params.startTime,
         scheduled_end_time: params.scheduledEndTime || null,
+        grace_period_minutes: Math.max(0, Number(params.gracePeriodMinutes) || 0),
         max_terminals: params.maxTerminals,
         participating_units: params.participatingUnits || null,
         visitor_registration_enabled: params.visitorRegistrationEnabled ?? true,
@@ -146,6 +183,8 @@ export const activityService = {
       sessionDate: data.session_date,
       startTime: data.start_time,
       scheduledEndTime: data.scheduled_end_time,
+      gracePeriodMinutes: data.grace_period_minutes || 0,
+      effectiveLockAt: calculateEffectiveLockTime(data.session_date, data.scheduled_end_time, data.grace_period_minutes, data.timezone),
       timezone: data.timezone,
       status: data.status,
       maxTerminals: data.max_terminals,
@@ -195,6 +234,85 @@ export const activityService = {
     const res = data as { success?: boolean; error?: string } | null
     if (res && res.success === false) {
       return { success: false, error: res.error || 'Failed to reopen session' }
+    }
+    return { success: true }
+  },
+
+  async cancelSession(sessionId: string, reason: string): Promise<{ success: boolean; error?: string }> {
+    const cleanReason = reason.trim()
+    if (cleanReason.length < 5) {
+      return { success: false, error: 'A cancellation reason of at least 5 characters is required.' }
+    }
+
+    const { data, error } = await supabase.rpc('cancel_activity_session', {
+      p_session_id: sessionId,
+      p_reason: cleanReason
+    })
+
+    if (error) return { success: false, error: error.message }
+    const res = data as { success?: boolean; error?: string } | null
+    if (res && res.success === false) {
+      return { success: false, error: res.error || 'Failed to cancel session' }
+    }
+    return { success: true }
+  },
+
+  async postponeSession(
+    sessionId: string,
+    newDate: string,
+    newStartTime: string,
+    newEndTime?: string,
+    reason: string = ''
+  ): Promise<{ success: boolean; error?: string }> {
+    const cleanReason = reason.trim()
+    if (cleanReason.length < 5) {
+      return { success: false, error: 'A postponement reason of at least 5 characters is required.' }
+    }
+
+    const { data, error } = await supabase.rpc('postpone_activity_session', {
+      p_session_id: sessionId,
+      p_new_date: newDate,
+      p_new_start_time: newStartTime,
+      p_new_end_time: newEndTime || null,
+      p_reason: cleanReason
+    })
+
+    if (error) return { success: false, error: error.message }
+    const res = data as { success?: boolean; error?: string } | null
+    if (res && res.success === false) {
+      return { success: false, error: res.error || 'Failed to postpone session' }
+    }
+    return { success: true }
+  },
+
+  async adjustActiveSession(
+    sessionId: string,
+    reason: string,
+    changes: {
+      title?: string
+      scheduledEndTime?: string | null
+      gracePeriodMinutes?: number
+      participatingUnits?: string[] | null
+    }
+  ): Promise<{ success: boolean; error?: string }> {
+    const cleanReason = reason.trim()
+    if (cleanReason.length < 5) {
+      return { success: false, error: 'A mandatory justification reason (at least 5 characters) is required for adjustments.' }
+    }
+
+    const { data, error } = await supabase.rpc('adjust_active_session', {
+      p_session_id: sessionId,
+      p_reason: cleanReason,
+      p_new_title: changes.title?.trim() || null,
+      p_new_end_time: changes.scheduledEndTime || null,
+      p_new_grace_minutes: changes.gracePeriodMinutes !== undefined ? changes.gracePeriodMinutes : null,
+      p_new_participating_units: changes.participatingUnits !== undefined ? changes.participatingUnits : null
+    })
+
+    if (error) return { success: false, error: error.message }
+    const res = data as { success?: boolean; error?: string } | null
+    if (res && res.success === false) {
+      return { success: false, error: res.error || 'Failed to adjust active session' }
     }
     return { success: true }
   }

@@ -28,13 +28,29 @@ describe('Route Architecture & Separation', () => {
     expect(isLeadershipPath('/other')).toBe(false)
   })
 
-  it('resolves leadership subpaths accurately', () => {
+  it('resolves leadership subpaths, aliases, and unknown paths accurately', () => {
+    // Canonical routes
     expect(resolveLeadershipSubpath('/la')).toBe('dashboard')
     expect(resolveLeadershipSubpath('/la/')).toBe('dashboard')
+    expect(resolveLeadershipSubpath('/la/dashboard')).toBe('dashboard')
     expect(resolveLeadershipSubpath('/la/activities')).toBe('activities')
+    expect(resolveLeadershipSubpath('/la/attendance')).toBe('attendance')
+    expect(resolveLeadershipSubpath('/la/members')).toBe('members')
     expect(resolveLeadershipSubpath('/la/reports')).toBe('reports')
+    expect(resolveLeadershipSubpath('/la/units')).toBe('units')
+    expect(resolveLeadershipSubpath('/la/users')).toBe('users')
+    expect(resolveLeadershipSubpath('/la/settings')).toBe('settings')
     expect(resolveLeadershipSubpath('/la/audit-logs')).toBe('audit-logs')
-    expect(resolveLeadershipSubpath('/la/unknown-route')).toBe('dashboard')
+
+    // Phase 1 Route Aliases
+    expect(resolveLeadershipSubpath('/la/sessions')).toBe('activities')
+    expect(resolveLeadershipSubpath('/la/audit')).toBe('audit-logs')
+    expect(resolveLeadershipSubpath('/la/admin')).toBe('users')
+
+    // Unknown routes return not-found (does NOT silently show dashboard)
+    expect(resolveLeadershipSubpath('/la/unknown-route')).toBe('not-found')
+    expect(resolveLeadershipSubpath('/la/non-existent-module')).toBe('not-found')
+    expect(resolveLeadershipSubpath('/la/foobar')).toBe('not-found')
   })
 
   it('routes Supabase recovery, invitation, confirmation, and expired-link callbacks to /la even when landing on /', () => {

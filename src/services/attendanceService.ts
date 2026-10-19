@@ -17,6 +17,7 @@ export interface AuthorizeTerminalResult {
   sessionId?: string
   sessionTitle?: string
   sessionDate?: string
+  participatingUnits?: string[] | null
   error?: string
 }
 
@@ -37,6 +38,7 @@ const STORAGE_KEY_SESSION_ID = 'ysaams_terminal_session_id'
 const STORAGE_KEY_TERMINAL_ID = 'ysaams_terminal_id'
 const STORAGE_KEY_SESSION_TITLE = 'ysaams_terminal_session_title'
 const STORAGE_KEY_SESSION_DATE = 'ysaams_terminal_session_date'
+const STORAGE_KEY_PARTICIPATING_UNITS = 'ysaams_terminal_participating_units'
 
 class AttendanceService {
   private heartbeatIntervalId: number | null = null
@@ -62,20 +64,29 @@ class AttendanceService {
     terminalId: string | null
     sessionTitle: string | null
     sessionDate: string | null
+    participatingUnits: string[] | null
   } {
     if (typeof window === 'undefined') {
-      return { token: null, sessionId: null, terminalId: null, sessionTitle: null, sessionDate: null }
+      return { token: null, sessionId: null, terminalId: null, sessionTitle: null, sessionDate: null, participatingUnits: null }
     }
     try {
+      let participatingUnits: string[] | null = null
+      const rawUnits = sessionStorage.getItem(STORAGE_KEY_PARTICIPATING_UNITS)
+      if (rawUnits) {
+        try {
+          participatingUnits = JSON.parse(rawUnits)
+        } catch {}
+      }
       return {
         token: sessionStorage.getItem(STORAGE_KEY_TOKEN),
         sessionId: sessionStorage.getItem(STORAGE_KEY_SESSION_ID),
         terminalId: sessionStorage.getItem(STORAGE_KEY_TERMINAL_ID),
         sessionTitle: sessionStorage.getItem(STORAGE_KEY_SESSION_TITLE),
-        sessionDate: sessionStorage.getItem(STORAGE_KEY_SESSION_DATE)
+        sessionDate: sessionStorage.getItem(STORAGE_KEY_SESSION_DATE),
+        participatingUnits
       }
     } catch {
-      return { token: null, sessionId: null, terminalId: null, sessionTitle: null, sessionDate: null }
+      return { token: null, sessionId: null, terminalId: null, sessionTitle: null, sessionDate: null, participatingUnits: null }
     }
   }
 
@@ -106,6 +117,7 @@ class AttendanceService {
         session_id: string
         session_title: string
         session_date: string
+        participating_units?: string[] | null
         terminal_id: string
         terminal_token: string
         reconnected: boolean
@@ -127,6 +139,11 @@ class AttendanceService {
         if (result.session_date) {
           sessionStorage.setItem(STORAGE_KEY_SESSION_DATE, result.session_date)
         }
+        if (result.participating_units) {
+          sessionStorage.setItem(STORAGE_KEY_PARTICIPATING_UNITS, JSON.stringify(result.participating_units))
+        } else {
+          sessionStorage.removeItem(STORAGE_KEY_PARTICIPATING_UNITS)
+        }
       }
 
       // Start the heartbeat timer (every 4 minutes, since lease expires in 10 minutes)
@@ -146,7 +163,8 @@ class AttendanceService {
         terminal,
         sessionId: result.session_id,
         sessionTitle: result.session_title,
-        sessionDate: result.session_date
+        sessionDate: result.session_date,
+        participatingUnits: result.participating_units || null
       }
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Unexpected authorization error'
@@ -247,8 +265,47 @@ class AttendanceService {
       sessionStorage.removeItem(STORAGE_KEY_TERMINAL_ID)
       sessionStorage.removeItem(STORAGE_KEY_SESSION_TITLE)
       sessionStorage.removeItem(STORAGE_KEY_SESSION_DATE)
+      sessionStorage.removeItem(STORAGE_KEY_PARTICIPATING_UNITS)
     } catch {
       // Storage unavailable
+    }
+  }
+
+  /**
+   * Token-validated suggestions lookup for authorized kiosks.
+   * Returns suggestions from previously recorded attendance and active census records.
+   */
+  async searchTerminalSuggestions(
+    sessionId: string,
+    unitId?: string | null,
+    searchQuery?: string
+  ): Promise<MemberRecord[]> {
+    try {
+      const token = this.getStoredTerminalToken()
+      if (!token || !sessionId) return []
+
+      const { data, error } = await supabase.rpc('search_terminal_suggestions', {
+        p_session_id: sessionId,
+        p_terminal_token: token,
+        p_unit_id: unitId || null,
+        p_search_query: (searchQuery || '').trim()
+      })
+
+      if (!error && Array.isArray(data)) {
+        return data.map((m: any) => ({
+          id: m.id,
+          fullName: m.full_name,
+          homeUnitId: m.home_unit_id,
+          homeUnitName: m.home_unit_name,
+          isActive: true,
+          createdAt: ''
+        }))
+      }
+
+      // Fallback to legacy search_terminal_members
+      return this.searchTerminalMembers(sessionId, unitId, searchQuery)
+    } catch {
+      return this.searchTerminalMembers(sessionId, unitId, searchQuery)
     }
   }
 
@@ -291,6 +348,7 @@ class AttendanceService {
 
   /**
    * Submits attendance via active terminal kiosk.
+   * Supports attendance without prior registration (Requirement A).
    */
   async recordAttendance(
     params: SubmitAttendanceParams
@@ -301,8 +359,58 @@ class AttendanceService {
         return { success: false, error: 'Terminal bearer token not found. Please reconnect terminal.' }
       }
 
+      // 1. Try unified record_terminal_checkin RPC (supports un-enrolled members and visitors)
+      const { data: checkinData, error: checkinErr } = await supabase.rpc('record_terminal_checkin', {
+        p_session_id: params.sessionId,
+        p_terminal_token: token,
+        p_attendee_name: params.attendeeName.trim(),
+        p_unit_id: params.unitId || null,
+        p_is_non_member: params.isNonMember,
+        p_member_id: params.memberId || null,
+        p_contact_phone: params.contactPhone?.trim() || null
+      })
+
+      if (!checkinErr) {
+        const res = checkinData as {
+          success: boolean
+          attendance_id?: string
+          member_id?: string
+          attendee_name?: string
+          is_non_member?: boolean
+          check_in_time?: string
+          error?: string
+        }
+        if (res && res.success) {
+          return {
+            success: true,
+            record: {
+              id: res.attendance_id || 'unknown',
+              sessionId: params.sessionId,
+              memberId: res.member_id,
+              attendeeName: res.attendee_name || params.attendeeName,
+              isNonMember: res.is_non_member ?? params.isNonMember,
+              unitId: params.unitId,
+              checkInTime: res.check_in_time || new Date().toISOString()
+            }
+          }
+        } else if (res && res.error) {
+          return { success: false, error: res.error }
+        }
+      } else {
+        // If checkinErr is a known business error (duplicate, lock expired, not participating, invalid token), return directly
+        const errMsg = checkinErr.message || ''
+        const errCode = (checkinErr as any).code || ''
+        if (
+          errCode === '23505' ||
+          errCode === 'P0001' ||
+          /already recorded|scheduled end time|not participating|expired|unauthorized/i.test(errMsg)
+        ) {
+          return { success: false, error: errMsg }
+        }
+      }
+
+      // 2. Fallback to specialized RPCs if record_terminal_checkin is not yet deployed (e.g. 404 or function not found)
       if (params.isNonMember) {
-        // Submit via record_visitor_attendance RPC
         const { data, error } = await supabase.rpc('record_visitor_attendance', {
           p_session_id: params.sessionId,
           p_full_name: params.attendeeName.trim(),
@@ -333,9 +441,11 @@ class AttendanceService {
           }
         }
       } else {
-        // Member Check-in: requires memberId
         if (!params.memberId) {
-          return { success: false, error: 'Member record identification required for Church members.' }
+          return {
+            success: false,
+            error: checkinErr?.message || 'Member record identification required for Church members.'
+          }
         }
 
         const { data, error } = await supabase.rpc('record_attendance', {
