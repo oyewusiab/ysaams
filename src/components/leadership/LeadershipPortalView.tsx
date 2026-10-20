@@ -16,9 +16,7 @@ import {
   AlertCircle,
   UserCheck,
   Plus,
-  Download,
   Shield,
-  Printer,
   Copy,
   X
 } from 'lucide-react'
@@ -30,19 +28,15 @@ import {
   MemberRecord,
   ActivityDefinition,
   ActivitySession,
-  AppRole,
-  SessionVisitor
+  AppRole
 } from '../../types/database'
 import { authService } from '../../services/authService'
 import { adminService } from '../../services/adminService'
 import { memberService } from '../../services/memberService'
 import { activityService } from '../../services/activityService'
 import { attendanceService } from '../../services/attendanceService'
-import {
-  reportService,
-  UnitMonthlyStat,
-  IndividualAttendanceHistory
-} from '../../services/reportService'
+import { reportService } from '../../services/reportService'
+import { ReportingWorkspace } from '../reporting/ReportingWorkspace'
 
 interface LeadershipPortalViewProps {
   currentSubpath: LeadershipRoute
@@ -94,14 +88,6 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
   const [usersList, setUsersList] = useState<UserProfile[]>([])
   const [auditLogs, setAuditLogs] = useState<any[]>([])
   const [stakeSummary, setStakeSummary] = useState<any>(null)
-  const [unitMonthlyStats, setUnitMonthlyStats] = useState<UnitMonthlyStat[]>([])
-  const [visitorsList, setVisitorsList] = useState<(SessionVisitor & { sessionTitle?: string; sessionDate?: string })[]>([])
-
-  // Reports Filter & Individual Lookup State
-  const [reportYear, setReportYear] = useState(() => new Date().getFullYear())
-  const [reportMonth, setReportMonth] = useState(() => new Date().getMonth() + 1)
-  const [selectedHistoryMemberId, setSelectedHistoryMemberId] = useState('')
-  const [memberHistory, setMemberHistory] = useState<IndividualAttendanceHistory | null>(null)
 
   // Action / Form States
   const [statusMsg, setStatusMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
@@ -220,14 +206,16 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
           setManualSessionId(activeSessions[0].id)
         }
       } else if (currentSubpath === 'reports') {
-        const [stats, mList, vList] = await Promise.all([
-          reportService.getUnitMonthlyRegister(reportYear, reportMonth, unitFilter),
+        const [uList, mList, actList, sList] = await Promise.all([
+          adminService.listUnits(),
           memberService.listMembers(unitFilter),
-          reportService.listSessionVisitors(unitFilter)
+          activityService.listActivities(),
+          activityService.listSessions()
         ])
-        setUnitMonthlyStats(stats)
+        setUnits(uList)
         setMembers(mList)
-        setVisitorsList(vList)
+        setActivities(actList)
+        setSessions(sList)
       } else if (currentSubpath === 'users') {
         if (isStakeLeader) {
           const [uList, userProfiles] = await Promise.all([
@@ -253,7 +241,7 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
   useEffect(() => {
     setStatusMsg(null)
     loadCurrentSubpathData()
-  }, [currentSubpath, isAuthenticated, reportYear, reportMonth])
+  }, [currentSubpath, isAuthenticated])
 
   const handleSignIn = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -860,20 +848,6 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
         type: 'error',
         text: result.error || 'Failed to record manual check-in.'
       })
-    }
-  }
-
-  const handleLoadMemberHistory = async (memberId: string) => {
-    setSelectedHistoryMemberId(memberId)
-    if (!memberId) {
-      setMemberHistory(null)
-      return
-    }
-    try {
-      const history = await reportService.getIndividualHistory(memberId, unitFilter)
-      setMemberHistory(history)
-    } catch (err: any) {
-      setStatusMsg({ type: 'error', text: err?.message || 'Failed to load individual member history' })
     }
   }
 
@@ -1879,224 +1853,12 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
 
         {/* 6. REPORTS & EXPORTS VIEW */}
         {currentSubpath === 'reports' && (
-          <div className="space-y-8">
-            {/* Monthly Unit Register */}
-            <div className="space-y-4">
-              <div className="flex flex-wrap items-center justify-between gap-4">
-                <div>
-                  <h3 className="text-sm font-bold text-white">Monthly Attendance Register</h3>
-                  <p className="text-xs text-slate-400">Calculates percentages against actual activity opportunities in period.</p>
-                </div>
-
-                <div className="flex flex-wrap items-center gap-2">
-                  <select
-                    aria-label="Report Year"
-                    value={reportYear}
-                    onChange={(e) => setReportYear(Number(e.target.value))}
-                    className="px-3 py-1.5 bg-slate-950 border border-slate-800 rounded-lg text-xs text-white"
-                  >
-                    {[2025, 2026, 2027].map(yr => (
-                      <option key={yr} value={yr}>{yr}</option>
-                    ))}
-                  </select>
-                  <select
-                    aria-label="Report Month"
-                    value={reportMonth}
-                    onChange={(e) => setReportMonth(Number(e.target.value))}
-                    className="px-3 py-1.5 bg-slate-950 border border-slate-800 rounded-lg text-xs text-white"
-                  >
-                    {Array.from({ length: 12 }, (_, idx) => idx + 1).map(m => (
-                      <option key={m} value={m}>
-                        {new Date(2026, m - 1, 1).toLocaleString('en-US', { month: 'long' })}
-                      </option>
-                    ))}
-                  </select>
-                  <button
-                    type="button"
-                    onClick={() => window.print()}
-                    className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-lg text-xs font-semibold flex items-center space-x-1.5"
-                  >
-                    <Printer className="w-3.5 h-3.5" />
-                    <span>Print / PDF</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      reportService.exportToCsv(
-                        unitMonthlyStats,
-                        `ysa_attendance_register_${reportYear}_${String(reportMonth).padStart(2, '0')}`
-                      )
-                    }
-                    className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold flex items-center space-x-1.5"
-                  >
-                    <Download className="w-3.5 h-3.5" />
-                    <span>Export CSV</span>
-                  </button>
-                </div>
-              </div>
-
-              <div className="bg-slate-950 border border-slate-800 rounded-xl overflow-hidden">
-                <table className="w-full text-xs text-left text-slate-300">
-                  <thead className="bg-slate-900 border-b border-slate-800 uppercase text-[10px] text-slate-400">
-                    <tr>
-                      <th className="px-4 py-3">Stake Unit</th>
-                      <th className="px-4 py-3">Active Census</th>
-                      <th className="px-4 py-3">Total Check-Ins</th>
-                      <th className="px-4 py-3">Eligible Opps</th>
-                      <th className="px-4 py-3">Attendance %</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {unitMonthlyStats.map(stat => (
-                      <tr key={stat.unitId} className="border-b border-slate-900 hover:bg-slate-900/50">
-                        <td className="px-4 py-3 font-semibold text-white">{stat.unitName}</td>
-                        <td className="px-4 py-3">{stat.totalMembers}</td>
-                        <td className="px-4 py-3">{stat.totalAttended}</td>
-                        <td className="px-4 py-3">{stat.totalOpportunities}</td>
-                        <td className="px-4 py-3 font-bold text-emerald-400">
-                          {stat.percentage !== null ? `${stat.percentage}%` : 'N/A (No events)'}
-                        </td>
-                      </tr>
-                    ))}
-                    {unitMonthlyStats.length === 0 && (
-                      <tr>
-                        <td colSpan={5} className="px-4 py-6 text-center text-slate-500">No attendance data in selected period.</td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-
-            {/* Individual Member Attendance History */}
-            <div className="space-y-4 pt-6 border-t border-slate-800">
-              <div className="flex flex-wrap items-center justify-between gap-4">
-                <div>
-                  <h3 className="text-sm font-bold text-white">Individual Attendance History</h3>
-                  <p className="text-xs text-slate-400">Inspect complete check-in history for any member in your unit scope.</p>
-                </div>
-                <div className="flex items-center gap-2">
-                  <select
-                    aria-label="Inspect Member History"
-                    value={selectedHistoryMemberId}
-                    onChange={(e) => handleLoadMemberHistory(e.target.value)}
-                    className="px-3 py-1.5 bg-slate-950 border border-slate-800 rounded-lg text-xs text-white min-w-[220px]"
-                  >
-                    <option value="">Select Member to Inspect...</option>
-                    {members.map(m => (
-                      <option key={m.id} value={m.id}>
-                        {m.fullName} ({m.homeUnitName || 'Unit'})
-                      </option>
-                    ))}
-                  </select>
-                  {memberHistory && memberHistory.sessions.length > 0 && (
-                    <button
-                      type="button"
-                      onClick={() =>
-                        reportService.exportToCsv(
-                          memberHistory.sessions,
-                          `ysa_member_history_${memberHistory.fullName.replace(/\s+/g, '_').toLowerCase()}`
-                        )
-                      }
-                      className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-lg text-xs font-semibold flex items-center space-x-1.5"
-                    >
-                      <Download className="w-3.5 h-3.5" />
-                      <span>Export History</span>
-                    </button>
-                  )}
-                </div>
-              </div>
-
-              {memberHistory && (
-                <div className="bg-slate-950 border border-slate-800 rounded-xl overflow-hidden">
-                  <div className="px-4 py-3 bg-slate-900/70 border-b border-slate-800 flex items-center justify-between text-xs">
-                    <div>
-                      <span className="font-bold text-white">{memberHistory.fullName}</span>
-                      <span className="text-slate-400 ml-2">({memberHistory.homeUnitName})</span>
-                    </div>
-                    <span className="px-2.5 py-0.5 rounded bg-emerald-950 text-emerald-400 border border-emerald-800 font-semibold">
-                      Total Sessions Attended: {memberHistory.attendedCount}
-                    </span>
-                  </div>
-                  <table className="w-full text-xs text-left text-slate-300">
-                    <thead className="bg-slate-900 border-b border-slate-800 uppercase text-[10px] text-slate-400">
-                      <tr>
-                        <th className="px-4 py-2.5">Session Title</th>
-                        <th className="px-4 py-2.5">Session Date</th>
-                        <th className="px-4 py-2.5">Check-In Timestamp</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {memberHistory.sessions.map((s) => (
-                        <tr key={`${s.sessionId}-${s.checkInTime}`} className="border-b border-slate-900">
-                          <td className="px-4 py-2.5 font-semibold text-white">{s.sessionTitle}</td>
-                          <td className="px-4 py-2.5">{s.sessionDate}</td>
-                          <td className="px-4 py-2.5 font-mono text-[11px]">{new Date(s.checkInTime).toLocaleString()}</td>
-                        </tr>
-                      ))}
-                      {memberHistory.sessions.length === 0 && (
-                        <tr>
-                          <td colSpan={3} className="px-4 py-4 text-center text-slate-500">No recorded check-ins for this member yet.</td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-
-            {/* Session Visitors Register */}
-            <div className="space-y-4 pt-6 border-t border-slate-800">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h3 className="text-sm font-bold text-white">Session Visitors Register</h3>
-                  <p className="text-xs text-slate-400">
-                    Scoped to inviting unit assignments for ward/branch leaders; unassigned visitors visible only to stake-wide leaders.
-                  </p>
-                </div>
-                {visitorsList.length > 0 && (
-                  <button
-                    type="button"
-                    onClick={() => reportService.exportToCsv(visitorsList, `ysa_visitors_register_${reportYear}`)}
-                    className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-lg text-xs font-semibold flex items-center space-x-1.5"
-                  >
-                    <Download className="w-3.5 h-3.5" />
-                    <span>Export Visitors CSV</span>
-                  </button>
-                )}
-              </div>
-
-              <div className="bg-slate-950 border border-slate-800 rounded-xl overflow-hidden">
-                <table className="w-full text-xs text-left text-slate-300">
-                  <thead className="bg-slate-900 border-b border-slate-800 uppercase text-[10px] text-slate-400">
-                    <tr>
-                      <th className="px-4 py-3">Visitor Name</th>
-                      <th className="px-4 py-3">Inviting Unit</th>
-                      <th className="px-4 py-3">Session</th>
-                      <th className="px-4 py-3">Contact Phone</th>
-                      <th className="px-4 py-3">Check-In Time</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {visitorsList.map(v => (
-                      <tr key={v.id} className="border-b border-slate-900 hover:bg-slate-900/50">
-                        <td className="px-4 py-3 font-semibold text-white">{v.fullName}</td>
-                        <td className="px-4 py-3">{v.invitingUnitName}</td>
-                        <td className="px-4 py-3">{v.sessionTitle} ({v.sessionDate})</td>
-                        <td className="px-4 py-3">{v.contactPhone || '-'}</td>
-                        <td className="px-4 py-3 font-mono text-[11px]">{new Date(v.createdAt).toLocaleString()}</td>
-                      </tr>
-                    ))}
-                    {visitorsList.length === 0 && (
-                      <tr>
-                        <td colSpan={5} className="px-4 py-6 text-center text-slate-500">No visitor records in scope.</td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </div>
+          <ReportingWorkspace
+            units={units}
+            activities={activities}
+            sessions={sessions}
+            members={members}
+          />
         )}
 
         {/* 7. USER GOVERNANCE VIEW */}
