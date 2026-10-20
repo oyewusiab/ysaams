@@ -40,6 +40,51 @@ const STORAGE_KEY_SESSION_TITLE = 'ysaams_terminal_session_title'
 const STORAGE_KEY_SESSION_DATE = 'ysaams_terminal_session_date'
 const STORAGE_KEY_PARTICIPATING_UNITS = 'ysaams_terminal_participating_units'
 
+/**
+ * Maps raw database/RPC/network error messages into warm, friendly, actionable text.
+ * Never exposes raw SQL codes, RPC names, stack traces, or internal database schemas.
+ */
+export function humanizeTerminalError(error?: string | null): string {
+  if (!error) return 'We could not complete your check-in. Please try again or ask a leader for assistance.'
+  const err = error.toLowerCase()
+
+  if (err.includes('duplicate') || err.includes('already recorded') || err.includes('already been marked present') || err.includes('23505')) {
+    return 'It looks like your attendance has already been recorded for this activity today!'
+  }
+  if (err.includes('terminal limit reached')) {
+    return 'This check-in station has reached its device connection limit. Please use an existing terminal or contact a YSA leader.'
+  }
+  if (err.includes('lease expired') || err.includes('token revoked') || err.includes('unauthorized terminal token') || err.includes('session authorization expired')) {
+    return 'This check-in session has expired or was disconnected. Please enter the session code again or ask a YSA leader.'
+  }
+  if (err.includes('invalid attendance code') || err.includes('invalid session code') || err.includes('code has expired') || err.includes('session code')) {
+    return 'Invalid or expired session code. Please double-check the 6-character code with your leader.'
+  }
+  if (err.includes('scheduled end time') || err.includes('grace period') || err.includes('effective lock time') || err.includes('has closed') || err.includes('writes are closed')) {
+    return 'Attendance for this activity has concluded. The scheduled check-in window and grace period have ended.'
+  }
+  if (err.includes('cancelled') || err.includes('is cancelled')) {
+    return 'This activity session has been cancelled. Please check with your YSA leader for updates.'
+  }
+  if (err.includes('not active') || err.includes('is not active') || err.includes('draft')) {
+    return 'This activity check-in is not open yet. Please wait for a leader to start the session.'
+  }
+
+  if (err.includes('not participating') || err.includes('not an authorized participating unit')) {
+    return 'The selected ward or branch is not participating in this specific session. Please choose an authorized unit.'
+  }
+  if (err.includes('visitor registration is disabled')) {
+    return 'Visitor check-in is not enabled for this session. Please speak with an activity leader.'
+  }
+  if (err.includes('network') || err.includes('failed to fetch') || err.includes('timeout')) {
+    return 'Unable to reach the server. Please check your internet connection and try again.'
+  }
+
+  // Graceful fallback without exposing internal details
+  return 'We could not complete your check-in right now. Please try again.'
+}
+
+
 class AttendanceService {
   private heartbeatIntervalId: number | null = null
 

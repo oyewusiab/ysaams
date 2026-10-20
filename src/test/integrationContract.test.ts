@@ -5,7 +5,7 @@ import path from 'path'
 describe('Migration Static Contract & Verification Tests', () => {
   const migrationsDir = path.resolve(__dirname, '../../supabase/migrations')
 
-  it('contains all sequentially versioned migration files (Migrations 1 through 8)', () => {
+  it('contains all sequentially versioned migration files (Migrations 1 through 9)', () => {
     const files = fs.readdirSync(migrationsDir).filter(f => f.endsWith('.sql'))
     expect(files).toContain('20261013000001_core_identity_and_units.sql')
     expect(files).toContain('20261013000002_core_rls_policies.sql')
@@ -15,7 +15,9 @@ describe('Migration Static Contract & Verification Tests', () => {
     expect(files).toContain('20261018000006_targeted_manual_attendance_authorization.sql')
     expect(files).toContain('20261019000007_release_readiness_admin_and_kiosk_remediation.sql')
     expect(files).toContain('20261019000008_clerk_roles_and_least_privilege_rls.sql')
+    expect(files).toContain('20261020000009_phase2a_scheduling_and_adjustments.sql')
   })
+
 
   it('verifies Migration 1 defines all core identity tables and immutability triggers', () => {
     const content = fs.readFileSync(path.join(migrationsDir, '20261013000001_core_identity_and_units.sql'), 'utf-8')
@@ -156,5 +158,24 @@ describe('Migration Static Contract & Verification Tests', () => {
     expect(content).toContain('CREATE POLICY policy_attendance_view ON public.attendance_records')
     expect(content).toContain('CREATE POLICY policy_visitors_view ON public.session_visitors')
   })
+
+  it('verifies Migration 9 defines scheduling, grace period, cancellation, suggestions and dynamic check-in RPCs', () => {
+    const content = fs.readFileSync(
+      path.join(migrationsDir, '20261020000009_phase2a_scheduling_and_adjustments.sql'),
+      'utf-8'
+    )
+    expect(content).toContain('ADD COLUMN IF NOT EXISTS grace_period_minutes')
+    expect(content).toContain('ADD COLUMN IF NOT EXISTS cancellation_reason')
+    expect(content).toContain('CREATE TABLE IF NOT EXISTS public.session_adjustment_requests')
+    expect(content).toContain('CREATE OR REPLACE FUNCTION public.get_session_effective_lock_time')
+    expect(content).toContain('CREATE OR REPLACE FUNCTION public.search_terminal_suggestions')
+    expect(content).toContain('CREATE OR REPLACE FUNCTION public.record_terminal_checkin')
+    expect(content).toContain('CREATE OR REPLACE FUNCTION public.cancel_activity_session')
+    expect(content).toContain('CREATE OR REPLACE FUNCTION public.postpone_activity_session')
+    expect(content).toContain('CREATE OR REPLACE FUNCTION public.adjust_active_session')
+    expect(content).toContain('REVOKE EXECUTE ON FUNCTION public.search_terminal_suggestions(UUID, TEXT, UUID, TEXT) FROM PUBLIC')
+    expect(content).toContain('REVOKE EXECUTE ON FUNCTION public.record_terminal_checkin(UUID, TEXT, TEXT, UUID, BOOLEAN, UUID, TEXT) FROM PUBLIC')
+  })
 })
+
 
