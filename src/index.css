@@ -86,3 +86,81 @@ body {
   }
 }
 
+/* Phase 5 Print Styles: High-contrast ink-preserving layout for Stake Registers */
+@media print {
+  @page {
+    margin: 12mm;
+    size: auto;
+  }
+
+  body {
+    background-color: #ffffff !important;
+    color: #0f172a !important;
+    font-size: 11pt !important;
+  }
+
+  /* Hide interactive portal navigation, buttons, drawers and modals */
+  header,
+  nav,
+  button,
+  input,
+  select,
+  .no-print,
+  [role="dialog"] {
+    display: none !important;
+  }
+
+  /* Reset dark container backgrounds and borders to clean printable paper style */
+  .bg-slate-900,
+  .bg-slate-950,
+  .bg-slate-900\/80,
+  .bg-slate-950\/70,
+  .bg-slate-950\/60,
+  .bg-slate-950\/80 {
+    background-color: #ffffff !important;
+    border-color: #e2e8f0 !important;
+    box-shadow: none !important;
+    color: #0f172a !important;
+  }
+
+  .text-white,
+  .text-slate-100,
+  .text-slate-200,
+  .text-slate-300,
+  .text-slate-400 {
+    color: #1e293b !important;
+  }
+
+  /* High contrast table borders and header */
+  table {
+    width: 100% !important;
+    border-collapse: collapse !important;
+    page-break-inside: auto !important;
+  }
+
+  tr {
+    page-break-inside: avoid !important;
+    page-break-after: auto !important;
+  }
+
+  thead {
+    display: table-header-group !important;
+    background-color: #f1f5f9 !important;
+  }
+
+  th {
+    border-bottom: 2px solid #0f172a !important;
+    color: #0f172a !important;
+    font-weight: 700 !important;
+    padding: 6px 8px !important;
+    text-align: left !important;
+  }
+
+  td {
+    border-bottom: 1px solid #cbd5e1 !important;
+    padding: 6px 8px !important;
+    color: #1e293b !important;
+  }
+}
+
+

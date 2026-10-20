@@ -18,7 +18,9 @@ import {
   Plus,
   Shield,
   Copy,
-  X
+  X,
+  Search,
+  Loader2
 } from 'lucide-react'
 import { useAuth } from '../../context/AuthContext'
 import {
@@ -41,6 +43,43 @@ import { ReportingWorkspace } from '../reporting/ReportingWorkspace'
 interface LeadershipPortalViewProps {
   currentSubpath: LeadershipRoute
   onNavigateSubpath: (subpath: LeadershipRoute) => void
+}
+
+export interface RoleNavAccess {
+  isStakeLeader: boolean
+  canRecordManualAttendance: boolean
+}
+
+export function getRolePermittedNavItems(
+  access: RoleNavAccess
+): { id: LeadershipRoute; label: string; icon: React.FC<{ className?: string }> }[] {
+  const items: { id: LeadershipRoute; label: string; icon: React.FC<{ className?: string }> }[] = [
+    { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+    { id: 'activities', label: 'Activities & Sessions', icon: Calendar }
+  ]
+
+  // Authorized manual attendance check-in is relevant to presiding leaders, hidden for read-only clerks
+  if (access.canRecordManualAttendance) {
+    items.push({ id: 'attendance', label: 'Authorized Check-in', icon: ClipboardCheck })
+  }
+
+  items.push(
+    { id: 'members', label: 'Member Census', icon: Users },
+    { id: 'reports', label: 'Reports & Export', icon: BarChart3 },
+    { id: 'units', label: 'Stake Units', icon: Building2 }
+  )
+
+  // Governance and audit logs are strictly restricted to stake presidency and system admin
+  if (access.isStakeLeader) {
+    items.push(
+      { id: 'users', label: 'User Governance', icon: UserCog },
+      { id: 'audit-logs', label: 'Audit Trail', icon: FileText }
+    )
+  }
+
+  items.push({ id: 'settings', label: 'Settings', icon: Settings })
+
+  return items
 }
 
 export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
@@ -158,6 +197,22 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
   const [adjustGraceMinutes, setAdjustGraceMinutes] = useState(0)
   const [adjustSelectedUnits, setAdjustSelectedUnits] = useState<string[]>([])
   const [adjustReason, setAdjustReason] = useState('')
+
+  // Modal & Confirmation States
+  const [closeSessionId, setCloseSessionId] = useState('')
+  const [isExecutingAction, setIsExecutingAction] = useState(false)
+
+  // Loading states for form submissions
+  const [isSubmittingUnit, setIsSubmittingUnit] = useState(false)
+  const [isSubmittingMember, setIsSubmittingMember] = useState(false)
+  const [isSubmittingActivity, setIsSubmittingActivity] = useState(false)
+  const [isSubmittingSession, setIsSubmittingSession] = useState(false)
+  const [isActivatingSessionId, setIsActivatingSessionId] = useState<string | null>(null)
+
+  // Member Census Search & Filter
+  const [memberSearchQuery, setMemberSearchQuery] = useState('')
+  const [memberUnitFilter, setMemberUnitFilter] = useState('all')
+  const [memberStatusFilter, setMemberStatusFilter] = useState<'all' | 'active' | 'archived'>('active')
 
   const unitFilter: string[] | null = reportUnitFilter
 
@@ -530,17 +585,26 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
     )
   }
 
-  const navItems: { id: LeadershipRoute; label: string; icon: React.FC<{ className?: string }> }[] = [
-    { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
-    { id: 'activities', label: 'Activities & Sessions', icon: Calendar },
-    { id: 'attendance', label: 'Authorized Check-in', icon: ClipboardCheck },
-    { id: 'members', label: 'Member Census', icon: Users },
-    { id: 'reports', label: 'Reports & Export', icon: BarChart3 },
-    { id: 'units', label: 'Stake Units', icon: Building2 },
-    { id: 'users', label: 'User Governance', icon: UserCog },
-    { id: 'audit-logs', label: 'Audit Trail', icon: FileText },
-    { id: 'settings', label: 'Settings', icon: Settings }
-  ]
+  const navItems = getRolePermittedNavItems({
+    isStakeLeader,
+    canRecordManualAttendance
+  })
+
+  // Filtered members for Member Census search & filter
+  const filteredMembersList = members.filter((m) => {
+    if (memberStatusFilter === 'active' && !m.isActive) return false
+    if (memberStatusFilter === 'archived' && m.isActive) return false
+    if (memberUnitFilter && memberUnitFilter !== 'all' && m.homeUnitId !== memberUnitFilter) return false
+    if (memberSearchQuery.trim()) {
+      const q = memberSearchQuery.toLowerCase().trim()
+      const matchesName = m.fullName.toLowerCase().includes(q)
+      const matchesPref = m.preferredName?.toLowerCase().includes(q)
+      const matchesPhone = m.phoneNumber?.toLowerCase().includes(q)
+      const matchesNumber = m.memberNumber?.toLowerCase().includes(q)
+      if (!matchesName && !matchesPref && !matchesPhone && !matchesNumber) return false
+    }
+    return true
+  })
 
   // Scoped units available when registering members (strictly manageable units, excluding clerk-only assignments)
   const memberCreatableUnits = isStakeLeader
@@ -563,7 +627,8 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
   // Handlers for modules
   const handleCreateUnit = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!isSystemAdmin || !newUnitName.trim()) return
+    if (!isSystemAdmin || !newUnitName.trim() || isSubmittingUnit) return
+    setIsSubmittingUnit(true)
     try {
       const createdName = newUnitName.trim()
       await adminService.createUnit(createdName, newUnitType)
@@ -572,6 +637,8 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
       setStatusMsg({ type: 'success', text: `Unit "${createdName}" successfully created.` })
     } catch (err: any) {
       setStatusMsg({ type: 'error', text: err?.message || 'Failed to create unit' })
+    } finally {
+      setIsSubmittingUnit(false)
     }
   }
 
@@ -591,8 +658,10 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
 
   const handleCreateMember = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!canManageMembers) {
-      setStatusMsg({ type: 'error', text: 'Unauthorized: Clerk accounts have read-only access and cannot modify member census.' })
+    if (!canManageMembers || isSubmittingMember) {
+      if (!canManageMembers) {
+        setStatusMsg({ type: 'error', text: 'Unauthorized: Clerk accounts have read-only access and cannot modify member census.' })
+      }
       return
     }
     if (!newMemberName.trim() || !newMemberUnitId) {
@@ -603,6 +672,7 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
       setStatusMsg({ type: 'error', text: 'Unauthorized: You can only register members into your assigned ward or branch.' })
       return
     }
+    setIsSubmittingMember(true)
     try {
       await memberService.createMember({
         fullName: newMemberName,
@@ -622,12 +692,15 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
       setStatusMsg({ type: 'success', text: 'Member record registered in census.' })
     } catch (err: any) {
       setStatusMsg({ type: 'error', text: err?.message || 'Failed to register member' })
+    } finally {
+      setIsSubmittingMember(false)
     }
   }
 
   const handleCreateActivity = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!canManageActivities || !newActTitle.trim()) return
+    if (!canManageActivities || !newActTitle.trim() || isSubmittingActivity) return
+    setIsSubmittingActivity(true)
     try {
       await activityService.createActivity(
         {
@@ -643,16 +716,19 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
       setStatusMsg({ type: 'success', text: 'Activity definition created.' })
     } catch (err: any) {
       setStatusMsg({ type: 'error', text: err?.message || 'Failed to create activity' })
+    } finally {
+      setIsSubmittingActivity(false)
     }
   }
 
   const handleCreateSession = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!canManageActivities) return
+    if (!canManageActivities || isSubmittingSession) return
     if (!newSessActivityId || !newSessTitle.trim()) {
       setStatusMsg({ type: 'error', text: 'Activity and session title are required.' })
       return
     }
+    setIsSubmittingSession(true)
     try {
       const clampedTerminals = Math.min(Math.max(1, Number(newSessMaxTerminals) || 2), 10)
       await activityService.createSession({
@@ -672,11 +748,14 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
       setStatusMsg({ type: 'success', text: 'New activity session scheduled.' })
     } catch (err: any) {
       setStatusMsg({ type: 'error', text: err?.message || 'Failed to schedule session' })
+    } finally {
+      setIsSubmittingSession(false)
     }
   }
 
   const handleInitiateSession = async (session: ActivitySession) => {
     if (!canManageActivities) return
+    setIsActivatingSessionId(session.id)
     const code = activityService.generateCode()
     const maxTerminals = Math.min(Math.max(1, session.maxTerminals || 2), 10)
     try {
@@ -693,6 +772,8 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
       }
     } catch (err: any) {
       setStatusMsg({ type: 'error', text: err?.message || 'Failed to initiate session' })
+    } finally {
+      setIsActivatingSessionId(null)
     }
   }
 
@@ -722,6 +803,7 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
       setStatusMsg({ type: 'error', text: 'A justification reason of at least 5 characters is required to reopen a closed session.' })
       return
     }
+    setIsExecutingAction(true)
     try {
       const res = await activityService.reopenSession(sessionId, reopenReason)
       if (res.success) {
@@ -734,6 +816,8 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
       }
     } catch (err: any) {
       setStatusMsg({ type: 'error', text: err?.message || 'Failed to reopen session' })
+    } finally {
+      setIsExecutingAction(false)
     }
   }
 
@@ -743,6 +827,7 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
       setStatusMsg({ type: 'error', text: 'A cancellation reason of at least 5 characters is required.' })
       return
     }
+    setIsExecutingAction(true)
     try {
       const res = await activityService.cancelSession(sessionId, cancelReason)
       if (res.success) {
@@ -755,6 +840,8 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
       }
     } catch (err: any) {
       setStatusMsg({ type: 'error', text: err?.message || 'Failed to cancel session' })
+    } finally {
+      setIsExecutingAction(false)
     }
   }
 
@@ -768,6 +855,7 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
       setStatusMsg({ type: 'error', text: 'A postponement reason of at least 5 characters is required.' })
       return
     }
+    setIsExecutingAction(true)
     try {
       const res = await activityService.postponeSession(
         sessionId,
@@ -789,6 +877,8 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
       }
     } catch (err: any) {
       setStatusMsg({ type: 'error', text: err?.message || 'Failed to postpone session' })
+    } finally {
+      setIsExecutingAction(false)
     }
   }
 
@@ -798,6 +888,7 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
       setStatusMsg({ type: 'error', text: 'A mandatory justification reason (at least 5 characters) is required for adjustments.' })
       return
     }
+    setIsExecutingAction(true)
     try {
       const res = await activityService.adjustActiveSession(sessionId, adjustReason, {
         title: adjustTitle.trim() || undefined,
@@ -815,6 +906,8 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
       }
     } catch (err: any) {
       setStatusMsg({ type: 'error', text: err?.message || 'Failed to adjust session' })
+    } finally {
+      setIsExecutingAction(false)
     }
   }
 
@@ -1020,10 +1113,20 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
                 </div>
                 <button
                   type="submit"
-                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold flex items-center space-x-1"
+                  disabled={isSubmittingUnit}
+                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded-lg text-xs font-semibold flex items-center space-x-1.5"
                 >
-                  <Plus className="w-3.5 h-3.5" />
-                  <span>Add Stake Unit</span>
+                  {isSubmittingUnit ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      <span>Adding...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>Add Stake Unit</span>
+                    </>
+                  )}
                 </button>
               </form>
             ) : (
@@ -1119,14 +1222,30 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
                       className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-lg text-xs text-white"
                     />
                   </div>
-                  <button type="submit" className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold">
-                    Save Activity
+                  <button
+                    type="submit"
+                    disabled={isSubmittingActivity}
+                    className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded-lg text-xs font-semibold flex items-center space-x-1.5"
+                  >
+                    {isSubmittingActivity ? (
+                      <>
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        <span>Saving...</span>
+                      </>
+                    ) : (
+                      <span>Save Activity</span>
+                    )}
                   </button>
                 </form>
 
                 {/* Schedule Session Form */}
                 <form onSubmit={handleCreateSession} className="bg-slate-950 border border-slate-800 p-4 rounded-xl space-y-3">
                   <h3 className="text-xs font-bold text-white uppercase tracking-wider">Schedule Live Session</h3>
+                  {activities.length === 0 && (
+                    <div className="p-3 bg-amber-950/40 border border-amber-800/60 rounded-lg text-xs text-amber-200">
+                      Create an activity template above before scheduling a session.
+                    </div>
+                  )}
                   <div>
                     <label className="block text-[11px] text-slate-300 uppercase mb-1">Activity</label>
                     <select
@@ -1256,8 +1375,19 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
                       />
                       <span>Allow Non-Member Visitor Check-In</span>
                     </label>
-                    <button type="submit" className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold">
-                      Schedule Session
+                    <button
+                      type="submit"
+                      disabled={isSubmittingSession || activities.length === 0}
+                      className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded-lg text-xs font-semibold flex items-center space-x-1.5"
+                    >
+                      {isSubmittingSession ? (
+                        <>
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          <span>Scheduling...</span>
+                        </>
+                      ) : (
+                        <span>Schedule Session</span>
+                      )}
                     </button>
                   </div>
                 </form>
@@ -1350,9 +1480,10 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
                               <>
                                 <button
                                   onClick={() => handleInitiateSession(s)}
-                                  className="px-2 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-[11px] font-semibold"
+                                  disabled={isActivatingSessionId === s.id}
+                                  className="px-2 py-1 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded text-[11px] font-semibold"
                                 >
-                                  Activate
+                                  {isActivatingSessionId === s.id ? 'Activating...' : 'Activate'}
                                 </button>
                                 <button
                                   onClick={() => {
@@ -1377,9 +1508,10 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
                               <>
                                 <button
                                   onClick={() => handleInitiateSession(s)}
-                                  className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded text-[11px] font-semibold"
+                                  disabled={isActivatingSessionId === s.id}
+                                  className="px-2 py-1 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-200 border border-slate-700 rounded text-[11px] font-semibold"
                                 >
-                                  Rotate
+                                  {isActivatingSessionId === s.id ? 'Rotating...' : 'Rotate'}
                                 </button>
                                 <button
                                   onClick={() => {
@@ -1394,7 +1526,7 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
                                   Adjust
                                 </button>
                                 <button
-                                  onClick={() => handleCloseSession(s.id)}
+                                  onClick={() => setCloseSessionId(s.id)}
                                   className="px-2 py-1 bg-red-950 hover:bg-red-900 border border-red-800 text-red-300 rounded text-[11px] font-semibold"
                                 >
                                   Close
@@ -1439,184 +1571,396 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
                 </table>
               </div>
 
-              {/* Adjust Modal */}
-              {adjustSessionId && (
-                <div className="mt-4 p-4 bg-slate-950 border border-blue-800/60 rounded-xl space-y-3">
-                  <p className="text-xs font-semibold text-blue-400">Adjust Active Activity Session (Controlled Approval)</p>
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                    <div>
-                      <label className="block text-[10px] text-slate-400 uppercase mb-1">Adjusted Title</label>
-                      <input
-                        type="text"
-                        value={adjustTitle}
-                        onChange={(e) => setAdjustTitle(e.target.value)}
-                        className="w-full px-3 py-1.5 bg-slate-900 border border-slate-800 rounded text-xs text-white"
-                      />
+              {/* 1. Close Session Confirmation Modal */}
+              {closeSessionId && (
+                <div
+                  className="fixed inset-0 z-50 bg-black/75 backdrop-blur-xs flex items-center justify-center p-4"
+                  role="dialog"
+                  aria-modal="true"
+                  aria-labelledby="close-session-title"
+                >
+                  <div className="bg-slate-900 border border-red-800/80 rounded-2xl p-6 max-w-md w-full shadow-2xl animate-terminal-enter">
+                    <div className="flex items-center space-x-3 mb-4">
+                      <div className="w-10 h-10 rounded-xl bg-red-950/80 border border-red-800 flex items-center justify-center text-red-400">
+                        <AlertCircle className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <h3 id="close-session-title" className="text-base font-bold text-white">Close Activity Session</h3>
+                        <p className="text-xs text-slate-400">Revoke terminal access and finalize check-in</p>
+                      </div>
                     </div>
-                    <div>
-                      <label className="block text-[10px] text-slate-400 uppercase mb-1">Scheduled End Time</label>
-                      <input
-                        type="time"
-                        value={adjustEndTime}
-                        onChange={(e) => setAdjustEndTime(e.target.value)}
-                        className="w-full px-3 py-1.5 bg-slate-900 border border-slate-800 rounded text-xs text-white"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[10px] text-slate-400 uppercase mb-1">Grace Period</label>
-                      <select
-                        value={adjustGraceMinutes}
-                        onChange={(e) => setAdjustGraceMinutes(Number(e.target.value))}
-                        className="w-full px-3 py-1.5 bg-slate-900 border border-slate-800 rounded text-xs text-white"
+                    <p className="text-xs text-slate-300 leading-relaxed mb-6">
+                      Closing this session will immediately disconnect all active kiosk terminals and end attendee check-ins. Closed sessions can only be reopened by a Stake Leader with documented justification.
+                    </p>
+                    <div className="flex justify-end space-x-3">
+                      <button
+                        type="button"
+                        onClick={() => setCloseSessionId('')}
+                        disabled={isExecutingAction}
+                        className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold"
                       >
-                        <option value={0}>Lock immediately</option>
-                        <option value={5}>5 min grace</option>
-                        <option value={10}>10 min grace</option>
-                        <option value={15}>15 min grace</option>
-                        <option value={30}>30 min grace</option>
-                        <option value={60}>60 min grace</option>
-                      </select>
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          setIsExecutingAction(true)
+                          await handleCloseSession(closeSessionId)
+                          setIsExecutingAction(false)
+                          setCloseSessionId('')
+                        }}
+                        disabled={isExecutingAction}
+                        className="px-4 py-2 bg-red-600 hover:bg-red-500 disabled:opacity-50 text-white rounded-xl text-xs font-semibold flex items-center space-x-1.5"
+                      >
+                        {isExecutingAction ? (
+                          <>
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            <span>Closing...</span>
+                          </>
+                        ) : (
+                          <span>Confirm Close Session</span>
+                        )}
+                      </button>
                     </div>
-                  </div>
-                  <div>
-                    <label className="block text-[10px] text-slate-400 uppercase mb-1">Mandatory Justification Reason (min 5 chars)</label>
-                    <input
-                      type="text"
-                      value={adjustReason}
-                      onChange={(e) => setAdjustReason(e.target.value)}
-                      placeholder="Enter operational reason for schedule or title adjustment..."
-                      className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded text-xs text-white"
-                    />
-                  </div>
-                  <div className="flex space-x-2">
-                    <button
-                      onClick={() => handleAdjustSession(adjustSessionId)}
-                      className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold rounded"
-                    >
-                      Authorize & Apply Adjustments
-                    </button>
-                    <button
-                      onClick={() => { setAdjustSessionId(''); setAdjustReason('') }}
-                      className="px-3 py-1.5 bg-slate-800 text-slate-300 text-xs rounded"
-                    >
-                      Cancel
-                    </button>
                   </div>
                 </div>
               )}
 
-              {/* Postpone Modal */}
+              {/* 2. Adjust Modal Dialog */}
+              {adjustSessionId && (
+                <div
+                  className="fixed inset-0 z-50 bg-black/75 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto"
+                  role="dialog"
+                  aria-modal="true"
+                  aria-labelledby="adjust-modal-title"
+                >
+                  <div className="bg-slate-900 border border-blue-800/80 rounded-2xl p-6 max-w-lg w-full shadow-2xl animate-terminal-enter my-8">
+                    <div className="flex items-center justify-between pb-4 mb-4 border-b border-slate-800">
+                      <div>
+                        <h3 id="adjust-modal-title" className="text-sm font-bold text-white">Adjust Active Session</h3>
+                        <p className="text-[11px] text-blue-400">Controlled adjustment with mandatory audit justification</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => { setAdjustSessionId(''); setAdjustReason('') }}
+                        className="text-slate-400 hover:text-white p-1 rounded-lg"
+                        aria-label="Close dialog"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+
+                    <div className="space-y-4">
+                      <div>
+                        <label className="block text-[11px] text-slate-300 uppercase mb-1 font-semibold">Adjusted Title</label>
+                        <input
+                          type="text"
+                          value={adjustTitle}
+                          onChange={(e) => setAdjustTitle(e.target.value)}
+                          className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-xs text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+                        />
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-[11px] text-slate-300 uppercase mb-1 font-semibold">Scheduled End Time</label>
+                          <input
+                            type="time"
+                            value={adjustEndTime}
+                            onChange={(e) => setAdjustEndTime(e.target.value)}
+                            className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-xs text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[11px] text-slate-300 uppercase mb-1 font-semibold">Grace Period</label>
+                          <select
+                            value={adjustGraceMinutes}
+                            onChange={(e) => setAdjustGraceMinutes(Number(e.target.value))}
+                            className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-xs text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+                          >
+                            <option value={0}>Lock immediately</option>
+                            <option value={5}>5 min grace</option>
+                            <option value={10}>10 min grace</option>
+                            <option value={15}>15 min grace</option>
+                            <option value={30}>30 min grace</option>
+                            <option value={60}>60 min grace</option>
+                          </select>
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="block text-[11px] text-slate-300 uppercase mb-1 font-semibold">
+                          Mandatory Justification Reason <span className="text-red-400">*</span>
+                        </label>
+                        <input
+                          type="text"
+                          value={adjustReason}
+                          onChange={(e) => setAdjustReason(e.target.value)}
+                          placeholder="Operational reason for schedule or title adjustment (min 5 chars)..."
+                          className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-xs text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+                        />
+                      </div>
+
+                      <div className="flex justify-end space-x-2 pt-2 border-t border-slate-800">
+                        <button
+                          type="button"
+                          onClick={() => { setAdjustSessionId(''); setAdjustReason('') }}
+                          disabled={isExecutingAction}
+                          className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-lg"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleAdjustSession(adjustSessionId)}
+                          disabled={isExecutingAction || adjustReason.trim().length < 5}
+                          className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-xs font-semibold rounded-lg flex items-center space-x-1.5"
+                        >
+                          {isExecutingAction ? (
+                            <>
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              <span>Applying...</span>
+                            </>
+                          ) : (
+                            <span>Authorize & Apply Adjustments</span>
+                          )}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* 3. Postpone Modal Dialog */}
               {postponeSessionId && (
-                <div className="mt-4 p-4 bg-slate-950 border border-slate-800 rounded-xl space-y-3">
-                  <p className="text-xs font-semibold text-slate-200">Postpone Scheduled Session</p>
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                    <div>
-                      <label className="block text-[10px] text-slate-400 uppercase mb-1">New Date</label>
-                      <input
-                        type="date"
-                        value={postponeNewDate}
-                        onChange={(e) => setPostponeNewDate(e.target.value)}
-                        className="w-full px-3 py-1.5 bg-slate-900 border border-slate-800 rounded text-xs text-white"
-                      />
+                <div
+                  className="fixed inset-0 z-50 bg-black/75 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto"
+                  role="dialog"
+                  aria-modal="true"
+                  aria-labelledby="postpone-modal-title"
+                >
+                  <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 max-w-lg w-full shadow-2xl animate-terminal-enter my-8">
+                    <div className="flex items-center justify-between pb-4 mb-4 border-b border-slate-800">
+                      <div>
+                        <h3 id="postpone-modal-title" className="text-sm font-bold text-white">Postpone Scheduled Session</h3>
+                        <p className="text-[11px] text-slate-400">Reschedule session date and times</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => { setPostponeSessionId(''); setPostponeReason('') }}
+                        className="text-slate-400 hover:text-white p-1 rounded-lg"
+                        aria-label="Close dialog"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
                     </div>
-                    <div>
-                      <label className="block text-[10px] text-slate-400 uppercase mb-1">New Start Time</label>
-                      <input
-                        type="time"
-                        value={postponeNewStartTime}
-                        onChange={(e) => setPostponeNewStartTime(e.target.value)}
-                        className="w-full px-3 py-1.5 bg-slate-900 border border-slate-800 rounded text-xs text-white"
-                      />
+
+                    <div className="space-y-4">
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                        <div>
+                          <label className="block text-[11px] text-slate-400 uppercase mb-1 font-semibold">New Date</label>
+                          <input
+                            type="date"
+                            value={postponeNewDate}
+                            onChange={(e) => setPostponeNewDate(e.target.value)}
+                            className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-xs text-white"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[11px] text-slate-400 uppercase mb-1 font-semibold">New Start Time</label>
+                          <input
+                            type="time"
+                            value={postponeNewStartTime}
+                            onChange={(e) => setPostponeNewStartTime(e.target.value)}
+                            className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-xs text-white"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[11px] text-slate-400 uppercase mb-1 font-semibold">New End Time</label>
+                          <input
+                            type="time"
+                            value={postponeNewEndTime}
+                            onChange={(e) => setPostponeNewEndTime(e.target.value)}
+                            className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-xs text-white"
+                          />
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="block text-[11px] text-slate-400 uppercase mb-1 font-semibold">
+                          Postponement Reason <span className="text-red-400">*</span>
+                        </label>
+                        <input
+                          type="text"
+                          value={postponeReason}
+                          onChange={(e) => setPostponeReason(e.target.value)}
+                          placeholder="e.g. Venue double-booked, rescheduled to next Saturday (min 5 chars)..."
+                          className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-xs text-white"
+                        />
+                      </div>
+
+                      <div className="flex justify-end space-x-2 pt-2 border-t border-slate-800">
+                        <button
+                          type="button"
+                          onClick={() => { setPostponeSessionId(''); setPostponeReason('') }}
+                          disabled={isExecutingAction}
+                          className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-lg"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handlePostponeSession(postponeSessionId)}
+                          disabled={isExecutingAction || !postponeNewDate || !postponeNewStartTime || postponeReason.trim().length < 5}
+                          className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-xs font-semibold rounded-lg flex items-center space-x-1.5"
+                        >
+                          {isExecutingAction ? (
+                            <>
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              <span>Postponing...</span>
+                            </>
+                          ) : (
+                            <span>Authorize Postponement</span>
+                          )}
+                        </button>
+                      </div>
                     </div>
-                    <div>
-                      <label className="block text-[10px] text-slate-400 uppercase mb-1">New End Time (Optional)</label>
-                      <input
-                        type="time"
-                        value={postponeNewEndTime}
-                        onChange={(e) => setPostponeNewEndTime(e.target.value)}
-                        className="w-full px-3 py-1.5 bg-slate-900 border border-slate-800 rounded text-xs text-white"
-                      />
-                    </div>
-                  </div>
-                  <div>
-                    <label className="block text-[10px] text-slate-400 uppercase mb-1">Postponement Reason (min 5 chars)</label>
-                    <input
-                      type="text"
-                      value={postponeReason}
-                      onChange={(e) => setPostponeReason(e.target.value)}
-                      placeholder="e.g. Venue double-booked, rescheduled to next Saturday..."
-                      className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded text-xs text-white"
-                    />
-                  </div>
-                  <div className="flex space-x-2">
-                    <button
-                      onClick={() => handlePostponeSession(postponeSessionId)}
-                      className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold rounded"
-                    >
-                      Authorize Postponement
-                    </button>
-                    <button
-                      onClick={() => { setPostponeSessionId(''); setPostponeReason('') }}
-                      className="px-3 py-1.5 bg-slate-800 text-slate-300 text-xs rounded"
-                    >
-                      Cancel
-                    </button>
                   </div>
                 </div>
               )}
 
-              {/* Cancel Modal */}
+              {/* 4. Cancel Modal Dialog */}
               {cancelSessionId && (
-                <div className="mt-4 p-4 bg-slate-950 border border-red-800/60 rounded-xl space-y-2">
-                  <p className="text-xs font-semibold text-red-400">Cancel Activity Session (Terminal Codes Will Be Revoked)</p>
-                  <input
-                    type="text"
-                    value={cancelReason}
-                    onChange={(e) => setCancelReason(e.target.value)}
-                    placeholder="Enter reason for cancellation (required, min 5 chars)..."
-                    className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-lg text-xs text-white"
-                  />
-                  <div className="flex space-x-2">
-                    <button
-                      onClick={() => handleCancelSession(cancelSessionId)}
-                      className="px-3 py-1.5 bg-red-600 hover:bg-red-500 text-white text-xs font-semibold rounded"
-                    >
-                      Confirm Session Cancellation
-                    </button>
-                    <button
-                      onClick={() => { setCancelSessionId(''); setCancelReason('') }}
-                      className="px-3 py-1.5 bg-slate-800 text-slate-300 text-xs rounded"
-                    >
-                      Back
-                    </button>
+                <div
+                  className="fixed inset-0 z-50 bg-black/75 backdrop-blur-xs flex items-center justify-center p-4"
+                  role="dialog"
+                  aria-modal="true"
+                  aria-labelledby="cancel-modal-title"
+                >
+                  <div className="bg-slate-900 border border-red-800/80 rounded-2xl p-6 max-w-md w-full shadow-2xl animate-terminal-enter">
+                    <div className="flex items-center justify-between pb-4 mb-4 border-b border-slate-800">
+                      <div>
+                        <h3 id="cancel-modal-title" className="text-sm font-bold text-white">Cancel Activity Session</h3>
+                        <p className="text-[11px] text-red-400">Terminal codes will be revoked</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => { setCancelSessionId(''); setCancelReason('') }}
+                        className="text-slate-400 hover:text-white p-1 rounded-lg"
+                        aria-label="Close dialog"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+
+                    <div className="space-y-4">
+                      <div>
+                        <label className="block text-[11px] text-slate-300 uppercase mb-1 font-semibold">
+                          Cancellation Reason <span className="text-red-400">*</span>
+                        </label>
+                        <input
+                          type="text"
+                          value={cancelReason}
+                          onChange={(e) => setCancelReason(e.target.value)}
+                          placeholder="Enter reason for cancellation (min 5 chars)..."
+                          className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-xs text-white"
+                        />
+                      </div>
+
+                      <div className="flex justify-end space-x-2 pt-2 border-t border-slate-800">
+                        <button
+                          type="button"
+                          onClick={() => { setCancelSessionId(''); setCancelReason('') }}
+                          disabled={isExecutingAction}
+                          className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-lg"
+                        >
+                          Back
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleCancelSession(cancelSessionId)}
+                          disabled={isExecutingAction || cancelReason.trim().length < 5}
+                          className="px-4 py-2 bg-red-600 hover:bg-red-500 disabled:opacity-50 text-white text-xs font-semibold rounded-lg flex items-center space-x-1.5"
+                        >
+                          {isExecutingAction ? (
+                            <>
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              <span>Cancelling...</span>
+                            </>
+                          ) : (
+                            <span>Confirm Session Cancellation</span>
+                          )}
+                        </button>
+                      </div>
+                    </div>
                   </div>
                 </div>
               )}
 
-              {/* Reopen Modal */}
+              {/* 5. Reopen Modal Dialog */}
               {reopenSessionId && (
-                <div className="mt-4 p-4 bg-slate-950 border border-amber-800/60 rounded-xl space-y-2">
-                  <p className="text-xs font-semibold text-amber-400">Reopen Closed Attendance Session</p>
-                  <input
-                    type="text"
-                    value={reopenReason}
-                    onChange={(e) => setReopenReason(e.target.value)}
-                    placeholder="Enter justification rationale (required, min 5 chars)..."
-                    className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-lg text-xs text-white"
-                  />
-                  <div className="flex space-x-2">
-                    <button
-                      onClick={() => handleReopenSession(reopenSessionId)}
-                      className="px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white text-xs font-semibold rounded"
-                    >
-                      Authorize Reopen (60 min)
-                    </button>
-                    <button
-                      onClick={() => { setReopenSessionId(''); setReopenReason('') }}
-                      className="px-3 py-1.5 bg-slate-800 text-slate-300 text-xs rounded"
-                    >
-                      Cancel
-                    </button>
+                <div
+                  className="fixed inset-0 z-50 bg-black/75 backdrop-blur-xs flex items-center justify-center p-4"
+                  role="dialog"
+                  aria-modal="true"
+                  aria-labelledby="reopen-modal-title"
+                >
+                  <div className="bg-slate-900 border border-amber-800/80 rounded-2xl p-6 max-w-md w-full shadow-2xl animate-terminal-enter">
+                    <div className="flex items-center justify-between pb-4 mb-4 border-b border-slate-800">
+                      <div>
+                        <h3 id="reopen-modal-title" className="text-sm font-bold text-white">Reopen Closed Session</h3>
+                        <p className="text-[11px] text-amber-400">Audited 60-minute reopening</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => { setReopenSessionId(''); setReopenReason('') }}
+                        className="text-slate-400 hover:text-white p-1 rounded-lg"
+                        aria-label="Close dialog"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+
+                    <div className="space-y-4">
+                      <div>
+                        <label className="block text-[11px] text-slate-300 uppercase mb-1 font-semibold">
+                          Justification Rationale <span className="text-red-400">*</span>
+                        </label>
+                        <input
+                          type="text"
+                          value={reopenReason}
+                          onChange={(e) => setReopenReason(e.target.value)}
+                          placeholder="Operational reason to reopen closed attendance (min 5 chars)..."
+                          className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-xs text-white"
+                        />
+                      </div>
+
+                      <div className="flex justify-end space-x-2 pt-2 border-t border-slate-800">
+                        <button
+                          type="button"
+                          onClick={() => { setReopenSessionId(''); setReopenReason('') }}
+                          disabled={isExecutingAction}
+                          className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-lg"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleReopenSession(reopenSessionId)}
+                          disabled={isExecutingAction || reopenReason.trim().length < 5}
+                          className="px-4 py-2 bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white text-xs font-semibold rounded-lg flex items-center space-x-1.5"
+                        >
+                          {isExecutingAction ? (
+                            <>
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              <span>Reopening...</span>
+                            </>
+                          ) : (
+                            <span>Authorize Reopen (60 min)</span>
+                          )}
+                        </button>
+                      </div>
+                    </div>
                   </div>
                 </div>
               )}
@@ -1628,12 +1972,32 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
         {currentSubpath === 'attendance' && (
           <div className="max-w-xl mx-auto py-4">
             {!canRecordManualAttendance ? (
-              <div className="p-8 bg-slate-950 border border-slate-800 rounded-2xl text-center text-slate-400">
-                <Shield className="w-8 h-8 mx-auto mb-2 text-slate-600" />
-                <p className="text-sm font-semibold text-white mb-1">Read-Only Clerk Scope</p>
-                <p className="text-xs">
-                  Authorized manual attendance check-in is restricted to Stake Presidency, System Administrators, Bishops, Branch Presidents, and YSA Leaders. Clerks have read-only access to attendance and reports.
-                </p>
+              <div className="p-8 bg-slate-950 border border-slate-800 rounded-2xl text-center text-slate-400 space-y-4">
+                <div className="w-14 h-14 bg-slate-900 border border-slate-800 rounded-2xl flex items-center justify-center mx-auto text-emerald-400 shadow-md">
+                  <Shield className="w-7 h-7 text-emerald-400" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white mb-1">Clerk Read-Only Reporting Scope</h3>
+                  <p className="text-xs text-slate-400 max-w-md mx-auto leading-relaxed">
+                    Direct manual attendance check-in is restricted to presiding leaders (Stake Presidency, Bishops, Branch Presidents, and YSA Leaders). As a Clerk, you have complete read-only reporting and audit access.
+                  </p>
+                </div>
+                <div className="flex justify-center gap-3 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => onNavigateSubpath('reports')}
+                    className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-semibold transition"
+                  >
+                    Open Reporting Workspace
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onNavigateSubpath('dashboard')}
+                    className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 rounded-xl text-xs font-semibold transition"
+                  >
+                    Return to Dashboard
+                  </button>
+                </div>
               </div>
             ) : (
               <div className="bg-slate-950 border border-slate-800 rounded-2xl p-6">
@@ -1789,8 +2153,19 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
                     />
                   </div>
                 </div>
-                <button type="submit" className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold">
-                  Register Member
+                <button
+                  type="submit"
+                  disabled={isSubmittingMember}
+                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded-lg text-xs font-semibold flex items-center space-x-1.5"
+                >
+                  {isSubmittingMember ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      <span>Registering...</span>
+                    </>
+                  ) : (
+                    <span>Register Member</span>
+                  )}
                 </button>
               </form>
             ) : (
@@ -1798,6 +2173,77 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
                 Read-only member census view for your assigned scope. Registering or archiving members requires Stake Presidency, System Admin, Bishop, Branch President, or assigned YSA Leader authority.
               </div>
             )}
+
+            {/* Census Search & Filter Toolbar */}
+            <div className="bg-slate-950 border border-slate-800 p-4 rounded-xl flex flex-wrap gap-3 items-center justify-between">
+              <div className="flex flex-wrap gap-3 items-center flex-1 min-w-[240px]">
+                <div className="relative flex-1 min-w-[200px]">
+                  <Search className="w-3.5 h-3.5 absolute left-3 top-2.5 text-slate-500" />
+                  <input
+                    type="text"
+                    value={memberSearchQuery}
+                    onChange={(e) => setMemberSearchQuery(e.target.value)}
+                    placeholder="Search by name, phone, or number..."
+                    className="w-full pl-9 pr-3 py-1.5 bg-slate-900 border border-slate-800 rounded-lg text-xs text-white placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                    aria-label="Search members"
+                  />
+                  {memberSearchQuery && (
+                    <button
+                      type="button"
+                      onClick={() => setMemberSearchQuery('')}
+                      className="absolute right-2.5 top-2 text-slate-500 hover:text-white"
+                      aria-label="Clear search"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+
+                {units.length > 0 && (
+                  <select
+                    value={memberUnitFilter}
+                    onChange={(e) => setMemberUnitFilter(e.target.value)}
+                    className="px-3 py-1.5 bg-slate-900 border border-slate-800 rounded-lg text-xs text-slate-300 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                    aria-label="Filter census by unit"
+                  >
+                    <option value="all">All Units ({units.length})</option>
+                    {units.map((u) => (
+                      <option key={u.id} value={u.id}>
+                        {u.unitName}
+                      </option>
+                    ))}
+                  </select>
+                )}
+
+                <select
+                  value={memberStatusFilter}
+                  onChange={(e) => setMemberStatusFilter(e.target.value as any)}
+                  className="px-3 py-1.5 bg-slate-900 border border-slate-800 rounded-lg text-xs text-slate-300 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                  aria-label="Filter census by status"
+                >
+                  <option value="active">Active Members Only</option>
+                  <option value="archived">Archived Records</option>
+                  <option value="all">All Statuses</option>
+                </select>
+              </div>
+
+              <div className="text-xs text-slate-400">
+                <span>Showing <strong className="text-white">{filteredMembersList.length}</strong> of {members.length} members</span>
+                {(memberSearchQuery || memberUnitFilter !== 'all' || memberStatusFilter !== 'active') && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMemberSearchQuery('')
+                      setMemberUnitFilter('all')
+                      setMemberStatusFilter('active')
+                    }}
+                    className="ml-3 text-emerald-400 hover:text-emerald-300 underline font-medium"
+                  >
+                    Reset Filters
+                  </button>
+                )}
+              </div>
+            </div>
 
             <div className="bg-slate-950 border border-slate-800 rounded-xl overflow-hidden">
               <table className="w-full text-xs text-left text-slate-300">
@@ -1811,7 +2257,7 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
                   </tr>
                 </thead>
                 <tbody>
-                  {members.map(m => (
+                  {filteredMembersList.map(m => (
                     <tr key={m.id} className="border-b border-slate-900 hover:bg-slate-900/50">
                       <td className="px-4 py-3 font-semibold text-white">{m.fullName} {m.preferredName && `(${m.preferredName})`}</td>
                       <td className="px-4 py-3">{m.homeUnitName || 'Unit'}</td>
@@ -1840,9 +2286,13 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
                       )}
                     </tr>
                   ))}
-                  {members.length === 0 && (
+                  {filteredMembersList.length === 0 && (
                     <tr>
-                      <td colSpan={canManageMembers ? 5 : 4} className="px-4 py-6 text-center text-slate-500">No members registered in census yet.</td>
+                      <td colSpan={canManageMembers ? 5 : 4} className="px-4 py-6 text-center text-slate-500">
+                        {members.length === 0
+                          ? 'No members registered in census yet.'
+                          : 'No members match the current search or filter criteria.'}
+                      </td>
                     </tr>
                   )}
                 </tbody>
@@ -1865,9 +2315,25 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
         {currentSubpath === 'users' && (
           <div className="space-y-6">
             {!isStakeLeader ? (
-              <div className="p-8 text-center text-slate-500">
-                <Shield className="w-8 h-8 mx-auto mb-2 text-slate-600" />
-                <p>User provisioning and governance is restricted to Stake System Administrators and Stake Presidency.</p>
+              <div className="p-8 bg-slate-950 border border-slate-800 rounded-2xl text-center text-slate-400 space-y-4 max-w-lg mx-auto">
+                <div className="w-14 h-14 bg-slate-900 border border-slate-800 rounded-2xl flex items-center justify-center mx-auto text-amber-400 shadow-md">
+                  <ShieldAlert className="w-7 h-7 text-amber-400" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white mb-1">Access Restricted to Stake Leadership</h3>
+                  <p className="text-xs text-slate-400 leading-relaxed">
+                    User provisioning, role assignment, and leadership directory governance require Stake System Administrator (<code className="text-emerald-400 font-mono">system_admin</code>) or Stake Presidency authorization.
+                  </p>
+                </div>
+                <div className="flex justify-center gap-3 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => onNavigateSubpath('dashboard')}
+                    className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-semibold transition"
+                  >
+                    Return to Dashboard
+                  </button>
+                </div>
               </div>
             ) : (
               <>
@@ -2236,9 +2702,25 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
         {currentSubpath === 'audit-logs' && (
           <div className="space-y-4">
             {!isStakeLeader ? (
-              <div className="p-8 text-center text-slate-500">
-                <Shield className="w-8 h-8 mx-auto mb-2 text-slate-600" />
-                <p>Security audit logs are restricted to Stake Presidency and System Administrators.</p>
+              <div className="p-8 bg-slate-950 border border-slate-800 rounded-2xl text-center text-slate-400 space-y-4 max-w-lg mx-auto">
+                <div className="w-14 h-14 bg-slate-900 border border-slate-800 rounded-2xl flex items-center justify-center mx-auto text-amber-400 shadow-md">
+                  <ShieldAlert className="w-7 h-7 text-amber-400" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white mb-1">Access Restricted to Stake Leadership</h3>
+                  <p className="text-xs text-slate-400 leading-relaxed">
+                    The immutable security audit trail is restricted to Stake Presidency and Stake System Administrators.
+                  </p>
+                </div>
+                <div className="flex justify-center gap-3 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => onNavigateSubpath('dashboard')}
+                    className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-semibold transition"
+                  >
+                    Return to Dashboard
+                  </button>
+                </div>
               </div>
             ) : (
               <>

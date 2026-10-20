@@ -146,7 +146,7 @@ export const VisualAnalyticsView: React.FC<VisualAnalyticsViewProps> = ({
       )}
 
       {/* 3. View Mode Toggle (Visual Charts vs Accessible Tables) */}
-      <div className="flex items-center justify-between pt-2">
+      <div className="flex items-center justify-between pt-2 no-print">
         <h4 className="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center space-x-2">
           <BarChart2 className="w-4 h-4 text-emerald-400" />
           <span>Visual Distribution & Comparisons</span>

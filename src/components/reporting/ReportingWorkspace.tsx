@@ -105,6 +105,7 @@ export const ReportingWorkspace: React.FC<ReportingWorkspaceProps> = ({
   const [savedPresets, setSavedPresets] = useState<SavedReportPreset[]>([])
   const [newPresetName, setNewPresetName] = useState('')
   const [showSavePresetModal, setShowSavePresetModal] = useState(false)
+  const [isPresetMenuOpen, setIsPresetMenuOpen] = useState(false)
 
   // Pagination
   const [pageSize, setPageSize] = useState<number>(25)
@@ -169,6 +170,7 @@ export const ReportingWorkspace: React.FC<ReportingWorkspaceProps> = ({
 
   // Handle Preset Load
   const handleLoadPreset = (preset: SavedReportPreset) => {
+    setIsPresetMenuOpen(false)
     // Defense-in-depth: Reapply current user scope
     let loadedUnitIds = preset.criteria.selectedUnitIds || []
     if (!hasStakeWideReadAccess && reportUnitFilter) {
@@ -380,8 +382,21 @@ export const ReportingWorkspace: React.FC<ReportingWorkspaceProps> = ({
 
   return (
     <div className="space-y-6">
+      {/* Printable Header - Visible only when printing */}
+      <div className="hidden print:block mb-6 border-b-2 border-slate-900 pb-4">
+        <h1 className="text-xl font-bold text-slate-900">Abeokuta Nigeria Obantoko Stake — YSA AMS</h1>
+        <h2 className="text-base font-semibold text-slate-800">{REPORT_TYPE_LABELS[criteria.reportType]}</h2>
+        <div className="text-xs text-slate-600 mt-2 flex flex-wrap gap-4">
+          <span>Period: <strong>{reportService.resolveEffectiveDateRange(criteria).periodLabel}</strong></span>
+          <span>Scope: <strong>{hasStakeWideReadAccess ? (criteria.selectedUnitIds.length > 0 ? `Selected Units (${criteria.selectedUnitIds.length})` : 'Stake-Wide (All Units)') : availableUnits.map(u => u.unitName).join(', ')}</strong></span>
+          <span>Total Records: <strong>{reportData?.metrics.totalRecords || 0}</strong></span>
+          <span>Unique Attendees: <strong>{reportData?.metrics.uniqueAttendees || 0}</strong></span>
+          <span>Generated: <strong>{getLagosDate()} (Africa/Lagos)</strong></span>
+        </div>
+      </div>
+
       {/* 1. Top Header: Report Title, Presets, Actions */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-slate-800">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-slate-800 no-print">
         <div>
           <div className="flex items-center space-x-2">
             <h2 className="text-lg font-bold text-white">Central Reporting Workspace</h2>
@@ -398,37 +413,51 @@ export const ReportingWorkspace: React.FC<ReportingWorkspaceProps> = ({
         <div className="flex flex-wrap items-center gap-2">
           {/* Saved Presets Dropdown */}
           {savedPresets.length > 0 && (
-            <div className="relative group">
+            <div className="relative">
               <button
                 type="button"
-                className="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-700 rounded-lg text-xs font-semibold text-slate-200 flex items-center space-x-1.5"
+                onClick={() => setIsPresetMenuOpen(!isPresetMenuOpen)}
+                className="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-700 rounded-lg text-xs font-semibold text-slate-200 flex items-center space-x-1.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+                aria-expanded={isPresetMenuOpen}
+                aria-haspopup="true"
               >
                 <Bookmark className="w-3.5 h-3.5 text-amber-400" />
                 <span>Saved Presets ({savedPresets.length})</span>
-                <ChevronDown className="w-3 h-3 text-slate-400" />
+                <ChevronDown className={`w-3 h-3 text-slate-400 transition-transform ${isPresetMenuOpen ? 'rotate-180' : ''}`} />
               </button>
-              <div className="absolute right-0 mt-1 w-64 bg-slate-900 border border-slate-700 rounded-xl shadow-xl py-1 z-30 hidden group-hover:block">
-                <div className="px-3 py-1.5 text-[10px] font-bold text-slate-400 uppercase tracking-wider border-b border-slate-800">
-                  Select Preset to Load
-                </div>
-                {savedPresets.map(preset => (
-                  <div
-                    key={preset.id}
-                    onClick={() => handleLoadPreset(preset)}
-                    className="px-3 py-2 text-xs text-slate-200 hover:bg-slate-800 cursor-pointer flex items-center justify-between group/item"
-                  >
-                    <span className="truncate pr-2 font-medium">{preset.name}</span>
+              {isPresetMenuOpen && (
+                <div className="absolute right-0 mt-1 w-64 bg-slate-900 border border-slate-700 rounded-xl shadow-xl py-1 z-30">
+                  <div className="px-3 py-1.5 text-[10px] font-bold text-slate-400 uppercase tracking-wider border-b border-slate-800 flex items-center justify-between">
+                    <span>Select Preset to Load</span>
                     <button
                       type="button"
-                      title="Delete Preset"
-                      onClick={(e) => handleDeletePreset(preset.id, e)}
-                      className="text-slate-500 hover:text-rose-400 opacity-0 group-hover/item:opacity-100 transition-opacity"
+                      onClick={() => setIsPresetMenuOpen(false)}
+                      className="text-slate-400 hover:text-white"
+                      aria-label="Close presets menu"
                     >
-                      <Trash2 className="w-3.5 h-3.5" />
+                      <X className="w-3 h-3" />
                     </button>
                   </div>
-                ))}
-              </div>
+                  {savedPresets.map(preset => (
+                    <div
+                      key={preset.id}
+                      onClick={() => handleLoadPreset(preset)}
+                      className="px-3 py-2 text-xs text-slate-200 hover:bg-slate-800 cursor-pointer flex items-center justify-between group/item"
+                    >
+                      <span className="truncate pr-2 font-medium">{preset.name}</span>
+                      <button
+                        type="button"
+                        title="Delete Preset"
+                        onClick={(e) => handleDeletePreset(preset.id, e)}
+                        className="text-slate-500 hover:text-rose-400 opacity-80 sm:opacity-0 sm:group-hover/item:opacity-100 transition-opacity p-1"
+                        aria-label={`Delete preset ${preset.name}`}
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 
@@ -436,7 +465,7 @@ export const ReportingWorkspace: React.FC<ReportingWorkspaceProps> = ({
           <button
             type="button"
             onClick={() => setShowSavePresetModal(true)}
-            className="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-700 rounded-lg text-xs font-semibold text-slate-200 flex items-center space-x-1.5"
+            className="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-700 rounded-lg text-xs font-semibold text-slate-200 flex items-center space-x-1.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
           >
             <Bookmark className="w-3.5 h-3.5 text-emerald-400" />
             <span>Save Setup</span>
@@ -447,7 +476,7 @@ export const ReportingWorkspace: React.FC<ReportingWorkspaceProps> = ({
             type="button"
             onClick={handleExportCsv}
             disabled={!reportData || reportData.records.length === 0}
-            className="px-3 py-1.5 bg-emerald-700 hover:bg-emerald-600 disabled:opacity-50 text-white rounded-lg text-xs font-semibold flex items-center space-x-1.5 shadow-sm"
+            className="px-3 py-1.5 bg-emerald-700 hover:bg-emerald-600 disabled:opacity-50 text-white rounded-lg text-xs font-semibold flex items-center space-x-1.5 shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
           >
             <Download className="w-3.5 h-3.5" />
             <span>CSV</span>
@@ -458,7 +487,7 @@ export const ReportingWorkspace: React.FC<ReportingWorkspaceProps> = ({
             type="button"
             onClick={handleExportXlsx}
             disabled={!reportData || reportData.records.length === 0}
-            className="px-3 py-1.5 bg-teal-700 hover:bg-teal-600 disabled:opacity-50 text-white rounded-lg text-xs font-semibold flex items-center space-x-1.5 shadow-sm"
+            className="px-3 py-1.5 bg-teal-700 hover:bg-teal-600 disabled:opacity-50 text-white rounded-lg text-xs font-semibold flex items-center space-x-1.5 shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
           >
             <FileSpreadsheet className="w-3.5 h-3.5" />
             <span>XLSX</span>
@@ -469,7 +498,7 @@ export const ReportingWorkspace: React.FC<ReportingWorkspaceProps> = ({
             type="button"
             onClick={handlePrint}
             disabled={!reportData || reportData.records.length === 0}
-            className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-lg text-xs font-semibold flex items-center space-x-1.5"
+            className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-lg text-xs font-semibold flex items-center space-x-1.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
           >
             <Printer className="w-3.5 h-3.5" />
             <span>Print / PDF</span>
@@ -516,7 +545,7 @@ export const ReportingWorkspace: React.FC<ReportingWorkspaceProps> = ({
       )}
 
       {/* 2. Report Type Selector & Period Quick Bar */}
-      <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-4 space-y-4">
+      <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-4 space-y-4 no-print">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           {/* Report Type Selector */}
           <div>
@@ -1232,7 +1261,7 @@ export const ReportingWorkspace: React.FC<ReportingWorkspaceProps> = ({
 
             {/* Pagination Controls */}
             {totalPages > 1 && (
-              <div className="px-4 py-3 bg-slate-900/50 border-t border-slate-800 flex items-center justify-between text-xs text-slate-400">
+              <div className="px-4 py-3 bg-slate-900/50 border-t border-slate-800 flex items-center justify-between text-xs text-slate-400 no-print">
                 <div>
                   Showing {Math.min(1, reportData?.records.length || 0)} - {Math.min(currentPage * pageSize, reportData?.records.length || 0)} of {reportData?.records.length} records
                 </div>
