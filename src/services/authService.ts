@@ -11,6 +11,12 @@ export interface AuthState {
   error: string | null
 }
 
+export interface UserProfileFetchResult {
+  profile: UserProfile | null
+  error?: string
+  notFound: boolean
+}
+
 export interface ParsedAuthCallback {
   hasAuthCallback: boolean
   isPasswordRecovery: boolean
@@ -191,10 +197,28 @@ export const authService = {
       }
 
       // Validate profile existence, active account_status, and assigned leadership roles
-      const profile = await this.fetchUserProfile(data.user.id)
-      const validation = this.validateAuthorizedProfile(profile)
+      const detailed = await this.fetchUserProfileDetailed(data.user.id)
+
+      if (detailed.error) {
+        // Query, network, or server error: do not falsely claim profile is absent
+        await supabase.auth.signOut().catch(() => {})
+        return {
+          success: false,
+          error: `Unable to load leadership profile: ${detailed.error}. Please check your connection and try again.`
+        }
+      }
+
+      if (detailed.notFound || !detailed.profile) {
+        await supabase.auth.signOut().catch(() => {})
+        return {
+          success: false,
+          error: 'No leadership profile found for this account. Please contact a Stake System Administrator.'
+        }
+      }
+
+      const validation = this.validateAuthorizedProfile(detailed.profile)
       if (!validation.authorized) {
-        await supabase.auth.signOut()
+        await supabase.auth.signOut().catch(() => {})
         return {
           success: false,
           error: validation.error
@@ -269,21 +293,57 @@ export const authService = {
     return supabase.auth.signOut()
   },
 
-  async fetchUserProfile(userId: string): Promise<UserProfile | null> {
+  async fetchUserProfileDetailed(
+    userId: string,
+    retryDelayMs = 150
+  ): Promise<UserProfileFetchResult> {
     try {
-      const { data, error } = await supabase
+      let { data, error } = await supabase
         .from('user_profiles')
         .select('id, full_name, email, account_status, created_at, updated_at')
         .eq('id', userId)
         .maybeSingle()
 
-      if (error || !data) return null
+      // If initial lookup returns no data or an error, retry once after a short delay
+      // to accommodate session/JWT propagation latency right after signInWithPassword.
+      if (error || !data) {
+        if (retryDelayMs > 0) {
+          await new Promise((resolve) => setTimeout(resolve, retryDelayMs))
+        }
+        const retry = await supabase
+          .from('user_profiles')
+          .select('id, full_name, email, account_status, created_at, updated_at')
+          .eq('id', userId)
+          .maybeSingle()
+        if (retry.data) {
+          data = retry.data
+          error = null
+        } else if (retry.error) {
+          error = retry.error
+        }
+      }
+
+      if (error) {
+        return { profile: null, error: error.message, notFound: false }
+      }
+
+      if (!data) {
+        return { profile: null, notFound: true }
+      }
 
       // Fetch user roles
-      const { data: rolesData } = await supabase
+      const { data: rolesData, error: rolesError } = await supabase
         .from('user_roles')
         .select('role_name')
         .eq('user_id', userId)
+
+      if (rolesError) {
+        return {
+          profile: null,
+          error: `Failed to load leadership roles: ${rolesError.message}`,
+          notFound: false
+        }
+      }
 
       const roles = (rolesData || []).map((r: { role_name: AppRole }) => r.role_name)
 
@@ -303,18 +363,27 @@ export const authService = {
       }))
 
       return {
-        id: data.id,
-        fullName: data.full_name,
-        email: data.email,
-        roles,
-        unitAssignments,
-        unitId: unitAssignments[0]?.unitId || null,
-        accountStatus: data.account_status,
-        createdAt: data.created_at,
-        updatedAt: data.updated_at
+        profile: {
+          id: data.id,
+          fullName: data.full_name,
+          email: data.email,
+          roles,
+          unitAssignments,
+          unitId: unitAssignments[0]?.unitId || null,
+          accountStatus: data.account_status,
+          createdAt: data.created_at,
+          updatedAt: data.updated_at
+        },
+        notFound: false
       }
-    } catch {
-      return null
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Database error while loading profile'
+      return { profile: null, error: msg, notFound: false }
     }
+  },
+
+  async fetchUserProfile(userId: string): Promise<UserProfile | null> {
+    const res = await this.fetchUserProfileDetailed(userId)
+    return res.profile
   }
 }

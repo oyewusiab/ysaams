@@ -20,7 +20,9 @@ import {
   Copy,
   X,
   Search,
-  Loader2
+  Loader2,
+  Radio,
+  ExternalLink
 } from 'lucide-react'
 import { useAuth } from '../../context/AuthContext'
 import {
@@ -39,6 +41,16 @@ import { activityService } from '../../services/activityService'
 import { attendanceService } from '../../services/attendanceService'
 import { reportService } from '../../services/reportService'
 import { ReportingWorkspace } from '../reporting/ReportingWorkspace'
+import { LiveActiveSessionView } from '../reporting/LiveActiveSessionView'
+import {
+  copyActivityCode,
+  copyAttendanceLink,
+  saveActiveSessionCode,
+  getAllActiveSessionCodes,
+  removeActiveSessionCode,
+  syncActiveSessionCodes
+} from '../../lib/clipboardUtils'
+import { humanizeErrorMessage } from '../../lib/errorUtils'
 
 interface LeadershipPortalViewProps {
   currentSubpath: LeadershipRoute
@@ -178,7 +190,8 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
   const [newSessSelectedUnits, setNewSessSelectedUnits] = useState<string[]>([])
 
   // 7. Initiate, Reopen, Cancel, Postpone & Adjust Session State
-  const [activeSessionCodes, setActiveSessionCodes] = useState<Record<string, string>>({})
+  const [activeSessionCodes, setActiveSessionCodes] = useState<Record<string, string>>(() => getAllActiveSessionCodes())
+  const [liveMonitorSession, setLiveMonitorSession] = useState<ActivitySession | null>(null)
   const [reopenReason, setReopenReason] = useState('')
   const [reopenSessionId, setReopenSessionId] = useState('')
 
@@ -249,6 +262,8 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
         setUnits(uList)
         setActivities(aList)
         setSessions(sList)
+        syncActiveSessionCodes(sList.filter(s => s.status === 'active').map(s => s.id))
+        setActiveSessionCodes(getAllActiveSessionCodes())
       } else if (currentSubpath === 'attendance') {
         const [sList, mList] = await Promise.all([
           activityService.listSessions(),
@@ -761,6 +776,7 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
     try {
       const res = await activityService.initiateSession(session.id, code, maxTerminals)
       if (res.success) {
+        saveActiveSessionCode(session.id, code)
         setActiveSessionCodes(prev => ({ ...prev, [session.id]: code }))
         await loadCurrentSubpathData()
         setStatusMsg({
@@ -782,6 +798,8 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
     try {
       const res = await activityService.closeSession(sessionId)
       if (res.success) {
+        removeActiveSessionCode(sessionId)
+        setLiveMonitorSession(prev => (prev?.id === sessionId ? null : prev))
         setActiveSessionCodes(prev => {
           const next = { ...prev }
           delete next[sessionId]
@@ -831,6 +849,8 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
     try {
       const res = await activityService.cancelSession(sessionId, cancelReason)
       if (res.success) {
+        removeActiveSessionCode(sessionId)
+        setLiveMonitorSession(prev => (prev?.id === sessionId ? null : prev))
         setCancelSessionId('')
         setCancelReason('')
         await loadCurrentSubpathData()
@@ -939,33 +959,55 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
     } else {
       setStatusMsg({
         type: 'error',
-        text: result.error || 'Failed to record manual check-in.'
+        text: humanizeErrorMessage(result.error, 'Failed to record manual check-in.')
       })
     }
   }
 
+  const isSubpathPermitted =
+    currentSubpath === 'not-found' || navItems.some((item) => item.id === currentSubpath)
+
+  if (!isSubpathPermitted) {
+    return (
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-10 text-center max-w-lg mx-auto my-12 shadow-xl">
+          <div className="w-14 h-14 bg-amber-50 dark:bg-amber-950/60 border border-amber-300 dark:border-amber-800/80 rounded-2xl flex items-center justify-center mx-auto mb-4 text-amber-600 dark:text-amber-400">
+            <ShieldAlert className="w-7 h-7" />
+          </div>
+          <h2 className="text-lg font-bold text-slate-900 dark:text-white mb-2">Access Restricted</h2>
+          <p className="text-xs text-slate-600 dark:text-slate-400 mb-6 leading-relaxed">
+            This page isn&apos;t available to your account. Your assigned leadership role or unit assignments do not permit viewing this module.
+          </p>
+          <div className="flex justify-center gap-3">
+            <button
+              onClick={() => onNavigateSubpath('dashboard')}
+              className="inline-flex items-center px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-semibold transition"
+            >
+              Return to Dashboard
+            </button>
+            <button
+              onClick={() => onNavigateSubpath('reports')}
+              className="inline-flex items-center px-4 py-2 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-xl text-xs font-semibold transition"
+            >
+              Open Reports
+            </button>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-      {/* Sub-navigation bar */}
-      <div className="flex items-center space-x-2 overflow-x-auto pb-4 mb-8 border-b border-slate-800 scrollbar-none">
-        {navItems.map((item) => {
-          const Icon = item.icon
-          const isActive = currentSubpath === item.id
-          return (
-            <button
-              key={item.id}
-              onClick={() => onNavigateSubpath(item.id)}
-              className={`flex items-center space-x-2 px-3.5 py-2 rounded-xl text-xs font-semibold whitespace-nowrap transition ${
-                isActive
-                  ? 'bg-emerald-600 text-white shadow-md shadow-emerald-900/40'
-                  : 'bg-slate-900 text-slate-300 hover:bg-slate-800 hover:text-white border border-slate-800'
-              }`}
-            >
-              <Icon className="w-4 h-4" />
-              <span>{item.label}</span>
-            </button>
-          )
-        })}
+      {/* Leadership Breadcrumb Header */}
+      <div className="mb-4 flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
+        <div className="flex items-center space-x-2">
+          <span>Leadership Portal</span>
+          <span>/</span>
+          <span className="font-semibold text-slate-900 dark:text-white capitalize">
+            {currentSubpath.replace('-', ' ')}
+          </span>
+        </div>
       </div>
 
       {/* Main Container */}
@@ -1023,6 +1065,37 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
         {/* 1. DASHBOARD VIEW */}
         {currentSubpath === 'dashboard' && (
           <div className="space-y-6">
+            {sessions.find((s) => s.status === 'active') && (
+              <div className="p-4 rounded-xl bg-emerald-50 dark:bg-emerald-950/80 border border-emerald-300 dark:border-emerald-700/60 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
+                <div className="flex items-center space-x-3">
+                  <div className="p-2 bg-emerald-100 dark:bg-emerald-900 text-emerald-700 dark:text-emerald-300 rounded-lg">
+                    <Radio className="w-5 h-5 animate-pulse" />
+                  </div>
+                  <div>
+                    <span className="text-[10px] uppercase font-bold text-emerald-800 dark:text-emerald-300 tracking-wider">
+                      Active Activity Session in Progress
+                    </span>
+                    <h4 className="text-sm font-bold text-slate-900 dark:text-white">
+                      {sessions.find((s) => s.status === 'active')?.sessionTitle}
+                    </h4>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const s = sessions.find((sess) => sess.status === 'active')
+                    if (s) {
+                      setLiveMonitorSession(s)
+                      onNavigateSubpath('activities')
+                    }
+                  }}
+                  className="inline-flex items-center space-x-2 px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold shadow-xs transition"
+                >
+                  <Radio className="w-3.5 h-3.5" />
+                  <span>Open Live Monitor</span>
+                </button>
+              </div>
+            )}
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
               <div className="p-4 bg-slate-950 border border-slate-800 rounded-xl">
                 <p className="text-xs text-slate-400">Active Stake Units</p>
@@ -1181,6 +1254,16 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
         {/* 3. ACTIVITIES & SESSIONS VIEW */}
         {currentSubpath === 'activities' && (
           <div className="space-y-8">
+            {liveMonitorSession && (
+              <div className="mb-6">
+                <LiveActiveSessionView
+                  session={liveMonitorSession}
+                  units={units}
+                  activeCode={activeSessionCodes[liveMonitorSession.id]}
+                  onClose={() => setLiveMonitorSession(null)}
+                />
+              </div>
+            )}
             {canManageActivities ? (
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                 {/* Activity Definition Form */}
@@ -1453,20 +1536,31 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
                           <td className="px-4 py-3">{s.maxTerminals} max</td>
                           <td className="px-4 py-3">
                             {s.status === 'active' && generatedCode ? (
-                              <div className="inline-flex items-center space-x-2 bg-slate-900 border border-emerald-700/60 px-2.5 py-1 rounded-lg">
-                                <span className="font-mono font-bold text-emerald-400 tracking-widest">{generatedCode}</span>
+                              <div className="inline-flex items-center space-x-1.5 bg-slate-100 dark:bg-slate-900 border border-emerald-600/40 dark:border-emerald-700/60 px-2 py-1 rounded-lg">
+                                <span className="font-mono font-bold text-emerald-700 dark:text-emerald-400 tracking-wider text-xs">{generatedCode}</span>
                                 <button
                                   type="button"
-                                  onClick={() => {
-                                    if (typeof navigator !== 'undefined' && navigator.clipboard) {
-                                      navigator.clipboard.writeText(`${window.location.origin}/${generatedCode}`)
-                                      setStatusMsg({ type: 'success', text: `Direct kiosk link copied: ${window.location.origin}/${generatedCode}` })
-                                    }
+                                  onClick={async () => {
+                                    const res = await copyActivityCode(generatedCode)
+                                    setStatusMsg({ type: res.success ? 'success' : 'error', text: res.message })
                                   }}
-                                  className="text-slate-400 hover:text-white"
-                                  title="Copy Direct Kiosk Link"
+                                  className="p-1 text-slate-500 hover:text-emerald-600 dark:text-slate-400 dark:hover:text-white rounded"
+                                  title="Copy 6-character activity code"
+                                  aria-label="Copy activity code"
                                 >
                                   <Copy className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={async () => {
+                                    const res = await copyAttendanceLink(window.location.origin, generatedCode)
+                                    setStatusMsg({ type: res.success ? 'success' : 'error', text: res.message })
+                                  }}
+                                  className="p-1 text-slate-500 hover:text-emerald-600 dark:text-slate-400 dark:hover:text-white rounded"
+                                  title="Copy public attendance link"
+                                  aria-label="Copy attendance link"
+                                >
+                                  <ExternalLink className="w-3.5 h-3.5" />
                                 </button>
                               </div>
                             ) : s.status === 'active' ? (
@@ -1504,7 +1598,18 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
                                 </button>
                               </>
                             )}
-                            {canManageActivities && s.status === 'active' && (
+                            {s.status === 'active' && (
+                                <button
+                                  type="button"
+                                  onClick={() => setLiveMonitorSession(s)}
+                                  className="px-2 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-[11px] font-semibold inline-flex items-center space-x-1"
+                                  title="Open Live Attendance Monitor"
+                                >
+                                  <Radio className="w-3 h-3 animate-pulse" />
+                                  <span>Live Monitor</span>
+                                </button>
+                              )}
+                              {canManageActivities && s.status === 'active' && (
                               <>
                                 <button
                                   onClick={() => handleInitiateSession(s)}
@@ -2385,7 +2490,7 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
                           <span>Provision New Leadership / Clerk Account</span>
                         </div>
                         <p className="text-[11px] text-slate-400">
-                          Configure leadership role and unit scope. Auth identities are managed securely server-side; once the user is invited or created in Supabase Auth, their profile is automatically bound and activated.
+                          Configure leadership role and unit scope. Leadership identities are provisioned securely; once the user account is created, their profile and role assignments are automatically activated.
                         </p>
                         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 items-end">
                           <div>
@@ -2732,7 +2837,7 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
                         <th className="px-4 py-3">Timestamp</th>
                         <th className="px-4 py-3">Actor</th>
                         <th className="px-4 py-3">Action</th>
-                        <th className="px-4 py-3">Target Table</th>
+                        <th className="px-4 py-3">Record Type</th>
                         <th className="px-4 py-3">Outcome</th>
                       </tr>
                     </thead>
@@ -2784,7 +2889,7 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
                   </div>
                   <div className="flex justify-between py-1.5">
                     <span className="text-slate-400">Audit Trail Policy</span>
-                    <span>Append-only (SECURITY DEFINER RPCs)</span>
+                    <span>Append-only (Server Enforced)</span>
                   </div>
                 </div>
               </div>

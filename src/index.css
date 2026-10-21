@@ -1,17 +1,201 @@
 @import "tailwindcss";
 
+@custom-variant dark (&:where(.dark, .dark *));
+
 :root {
+  color-scheme: light;
+}
+
+:root.dark {
   color-scheme: dark;
 }
 
 body {
   margin: 0;
   font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+  background-color: #f8fafc;
+  color: #0f172a;
+}
+
+body.dark,
+.dark body {
   background-color: #020617;
   color: #f8fafc;
 }
 
-/* Restrained animations for Public Terminal Experience */
+/* =========================================================================
+   REQUIREMENT 2: LIGHT THEME BY DEFAULT FOR LEADERSHIP PORTAL
+   Crisp white surfaces, light-gray canvas, readable dark text, subtle borders,
+   and accessible emerald brand accent. Retains dark mode as an optional user choice.
+   ========================================================================= */
+
+:root:not(.dark) .leadership-theme-scope {
+  background-color: #f8fafc;
+  color: #0f172a;
+}
+
+/* Light theme card and surface overrides */
+:root:not(.dark) .leadership-theme-scope .bg-slate-900,
+:root:not(.dark) .leadership-theme-scope .bg-slate-900\/90,
+:root:not(.dark) .leadership-theme-scope .bg-slate-900\/80 {
+  background-color: #ffffff;
+  color: #0f172a;
+  border-color: #e2e8f0;
+}
+
+:root:not(.dark) .leadership-theme-scope .bg-slate-950,
+:root:not(.dark) .leadership-theme-scope .bg-slate-950\/80,
+:root:not(.dark) .leadership-theme-scope .bg-slate-950\/70,
+:root:not(.dark) .leadership-theme-scope .bg-slate-950\/60 {
+  background-color: #f8fafc;
+  color: #0f172a;
+  border-color: #e2e8f0;
+}
+
+:root:not(.dark) .leadership-theme-scope .bg-slate-900\/50,
+:root:not(.dark) .leadership-theme-scope .hover\:bg-slate-900\/50:hover {
+  background-color: #f1f5f9;
+}
+
+:root:not(.dark) .leadership-theme-scope .border-slate-800,
+:root:not(.dark) .leadership-theme-scope .border-slate-900 {
+  border-color: #e2e8f0;
+}
+
+/* Light theme text readability & contrast */
+:root:not(.dark) .leadership-theme-scope .text-white {
+  color: #0f172a;
+}
+
+:root:not(.dark) .leadership-theme-scope .text-slate-100,
+:root:not(.dark) .leadership-theme-scope .text-slate-200,
+:root:not(.dark) .leadership-theme-scope .text-slate-300 {
+  color: #1e293b;
+}
+
+:root:not(.dark) .leadership-theme-scope .text-slate-400 {
+  color: #475569;
+}
+
+:root:not(.dark) .leadership-theme-scope .text-slate-500 {
+  color: #64748b;
+}
+
+/* Light theme inputs, selects & form controls */
+:root:not(.dark) .leadership-theme-scope input:not([type="checkbox"]):not([type="radio"]),
+:root:not(.dark) .leadership-theme-scope select,
+:root:not(.dark) .leadership-theme-scope textarea {
+  background-color: #ffffff;
+  color: #0f172a;
+  border-color: #cbd5e1;
+}
+
+:root:not(.dark) .leadership-theme-scope input::placeholder,
+:root:not(.dark) .leadership-theme-scope textarea::placeholder {
+  color: #94a3b8;
+}
+
+:root:not(.dark) .leadership-theme-scope input:focus,
+:root:not(.dark) .leadership-theme-scope select:focus,
+:root:not(.dark) .leadership-theme-scope textarea:focus {
+  border-color: #10b981;
+  outline: none;
+}
+
+/* Light theme secondary buttons & controls */
+:root:not(.dark) .leadership-theme-scope button.bg-slate-800,
+:root:not(.dark) .leadership-theme-scope .bg-slate-800 {
+  background-color: #f1f5f9;
+  color: #1e293b;
+  border-color: #cbd5e1;
+}
+
+:root:not(.dark) .leadership-theme-scope button.bg-slate-800:hover,
+:root:not(.dark) .leadership-theme-scope .bg-slate-800:hover {
+  background-color: #e2e8f0;
+  color: #0f172a;
+}
+
+/* Light theme tables */
+:root:not(.dark) .leadership-theme-scope thead {
+  background-color: #f8fafc;
+  border-color: #e2e8f0;
+}
+
+:root:not(.dark) .leadership-theme-scope thead th {
+  color: #475569;
+  border-color: #e2e8f0;
+}
+
+:root:not(.dark) .leadership-theme-scope tbody tr {
+  border-color: #f1f5f9;
+}
+
+:root:not(.dark) .leadership-theme-scope tbody tr:hover {
+  background-color: #f8fafc;
+}
+
+:root:not(.dark) .leadership-theme-scope tbody td {
+  border-color: #f1f5f9;
+}
+
+/* Light theme semantic badges and accent surfaces */
+:root:not(.dark) .leadership-theme-scope .bg-emerald-950,
+:root:not(.dark) .leadership-theme-scope .bg-emerald-950\/80 {
+  background-color: #ecfdf5;
+  color: #065f46;
+  border-color: #a7f3d0;
+}
+
+:root:not(.dark) .leadership-theme-scope .text-emerald-400 {
+  color: #047857;
+}
+
+:root:not(.dark) .leadership-theme-scope .bg-red-950,
+:root:not(.dark) .leadership-theme-scope .bg-red-950\/60,
+:root:not(.dark) .leadership-theme-scope .bg-red-950\/80 {
+  background-color: #fef2f2;
+  color: #991b1b;
+  border-color: #fecaca;
+}
+
+:root:not(.dark) .leadership-theme-scope .text-red-400,
+:root:not(.dark) .leadership-theme-scope .text-red-300 {
+  color: #b91c1c;
+}
+
+:root:not(.dark) .leadership-theme-scope .bg-amber-950,
+:root:not(.dark) .leadership-theme-scope .bg-amber-950\/80 {
+  background-color: #fffbeb;
+  color: #92400e;
+  border-color: #fde68a;
+}
+
+:root:not(.dark) .leadership-theme-scope .text-amber-400,
+:root:not(.dark) .leadership-theme-scope .text-amber-300 {
+  color: #b45309;
+}
+
+:root:not(.dark) .leadership-theme-scope .bg-blue-950,
+:root:not(.dark) .leadership-theme-scope .bg-blue-950\/80 {
+  background-color: #eff6ff;
+  color: #1e40af;
+  border-color: #bfdbfe;
+}
+
+:root:not(.dark) .leadership-theme-scope .text-blue-400,
+:root:not(.dark) .leadership-theme-scope .text-blue-300 {
+  color: #1d4ed8;
+}
+
+/* Modal Dialogs in Light Mode */
+:root:not(.dark) .leadership-theme-scope [role="dialog"] > div {
+  background-color: #ffffff;
+  border-color: #e2e8f0;
+  box-shadow: 0 25px 50px -12px rgb(0 0 0 / 0.15);
+}
+
+/* Animations for Public Terminal Experience */
 @keyframes fadeInScale {
   0% {
     opacity: 0;
@@ -162,5 +346,3 @@ body {
     color: #1e293b !important;
   }
 }
-
-

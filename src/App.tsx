@@ -1,7 +1,10 @@
 import React, { useState, useEffect } from 'react'
 import { AlertCircle } from 'lucide-react'
 import { AuthProvider, useAuth } from './context/AuthContext'
+import { ThemeProvider } from './context/ThemeContext'
 import { Navbar } from './components/layout/Navbar'
+import { LeadershipSidebar } from './components/layout/LeadershipSidebar'
+import { IdleSessionWatcher } from './components/layout/IdleTimeoutModal'
 import { PublicAttendanceView } from './components/public/PublicAttendanceView'
 import { TerminalView } from './components/public/TerminalView'
 import { LeadershipPortalView } from './components/leadership/LeadershipPortalView'
@@ -72,7 +75,7 @@ export function extractSessionCode(path: string): string | null {
 }
 
 export const AppContent: React.FC = () => {
-  const { isPasswordRecovery, authCallbackError } = useAuth()
+  const { isAuthenticated, isPasswordRecovery, authCallbackError } = useAuth()
   const [currentPath, setCurrentPath] = useState(() =>
     typeof window !== 'undefined'
       ? resolveInitialRoutePath(
@@ -122,8 +125,31 @@ export const AppContent: React.FC = () => {
   // 1. Leadership Portal Route Resolution
   if (isLeadershipPath(currentPath)) {
     const subpath = resolveLeadershipSubpath(currentPath)
+
+    if (isAuthenticated) {
+      return (
+        <div className="min-h-screen flex flex-col lg:flex-row bg-slate-50 dark:bg-slate-950 leadership-theme-scope">
+          <IdleSessionWatcher onIdleExpired={() => navigateTo('/la')} />
+          <LeadershipSidebar
+            currentSubpath={subpath}
+            onNavigateSubpath={(newSubpath) => navigateTo(`/la/${newSubpath}`)}
+            onNavigateHome={() => navigateTo('/')}
+          />
+          <div className="flex-1 flex flex-col min-w-0 overflow-y-auto">
+            <main className="flex-1">
+              <LeadershipPortalView
+                currentSubpath={subpath}
+                onNavigateSubpath={(newSubpath) => navigateTo(`/la/${newSubpath}`)}
+              />
+            </main>
+          </div>
+        </div>
+      )
+    }
+
+    // Unauthenticated Leadership Access (Sign-in form, recovery, invite activation)
     return (
-      <div className="min-h-screen flex flex-col bg-slate-950">
+      <div className="min-h-screen flex flex-col bg-slate-50 dark:bg-slate-950 leadership-theme-scope">
         <Navbar currentPath={currentPath} onNavigate={navigateTo} />
         <main className="flex-1">
           <LeadershipPortalView
@@ -213,9 +239,11 @@ export const AppContent: React.FC = () => {
 
 export const App: React.FC = () => {
   return (
-    <AuthProvider>
-      <AppContent />
-    </AuthProvider>
+    <ThemeProvider>
+      <AuthProvider>
+        <AppContent />
+      </AuthProvider>
+    </ThemeProvider>
   )
 }
 

@@ -40,6 +40,7 @@ import {
   triggerPrintReport
 } from '../../lib/exportUtils'
 import { formatLagosDateDisplay, formatLagosTimestampDisplay, getLagosDate } from '../../lib/timezone'
+import { humanizeErrorMessage } from '../../lib/errorUtils'
 import { VisualAnalyticsView } from './VisualAnalyticsView'
 
 interface ReportingWorkspaceProps {
@@ -146,7 +147,7 @@ export const ReportingWorkspace: React.FC<ReportingWorkspaceProps> = ({
       const data = await reportService.getComprehensiveReport(cleanCriteria, reportUnitFilter)
       setReportData(data)
     } catch (err: any) {
-      setErrorMessage(err.message || 'Failed to generate report.')
+      setErrorMessage(humanizeErrorMessage(err, "We couldn't load the attendance report. Please try again."))
     } finally {
       setIsLoading(false)
     }
