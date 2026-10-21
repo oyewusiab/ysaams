@@ -1,5 +1,8 @@
 import { supabase } from '../lib/supabase'
-import { ActivityDefinition, ActivitySession } from '../types/database'
+import { ActivityDefinition, ActivitySession, STANDARD_ACTIVITY_CATEGORIES, StandardActivityCategory } from '../types/database'
+
+export { STANDARD_ACTIVITY_CATEGORIES }
+export type { StandardActivityCategory }
 
 /**
  * Generates an unambiguous 6-character alphanumeric session code.
@@ -28,8 +31,29 @@ export function generateSessionCode(): string {
 export interface CreateActivityParams {
   title: string
   description?: string
-  category: 'spiritual' | 'social' | 'service' | 'sports' | 'temple' | 'educational' | 'other'
+  category: string
   defaultParticipatingUnits?: string[] | null
+}
+
+export interface ParsedActivityRow {
+  rowNumber: number
+  title: string
+  category: string
+  description?: string
+}
+
+export interface ActivityCsvError {
+  row: number
+  error: string
+  raw?: Record<string, string>
+}
+
+export interface ActivityImportResult {
+  totalRows: number
+  successCount: number
+  errorCount: number
+  errors: ActivityCsvError[]
+  importedActivities: ActivityDefinition[]
 }
 
 export interface CreateSessionParams {
@@ -70,6 +94,154 @@ export function calculateEffectiveLockTime(
   }
 }
 
+
+/**
+ * Robust RFC-4180 CSV parser supporting quotes, commas, escaped quotes, and CRLF/LF.
+ */
+export function parseCsvRows(text: string): string[][] {
+  const clean = text.replace(/^\uFEFF/, '') // Strip UTF-8 BOM
+  const rows: string[][] = []
+  let currentRow: string[] = []
+  let currentField = ''
+  let inQuotes = false
+  let i = 0
+
+  while (i < clean.length) {
+    const char = clean[i]
+
+    if (inQuotes) {
+      if (char === '"') {
+        if (i + 1 < clean.length && clean[i + 1] === '"') {
+          currentField += '"'
+          i += 2
+          continue
+        } else {
+          inQuotes = false
+          i++
+          continue
+        }
+      } else {
+        currentField += char
+        i++
+        continue
+      }
+    } else {
+      if (char === '"') {
+        inQuotes = true
+        i++
+        continue
+      } else if (char === ',') {
+        currentRow.push(currentField)
+        currentField = ''
+        i++
+        continue
+      } else if (char === '\r') {
+        if (i + 1 < clean.length && clean[i + 1] === '\n') {
+          i++
+        }
+        currentRow.push(currentField)
+        currentField = ''
+        rows.push(currentRow)
+        currentRow = []
+        i++
+        continue
+      } else if (char === '\n') {
+        currentRow.push(currentField)
+        currentField = ''
+        rows.push(currentRow)
+        currentRow = []
+        i++
+        continue
+      } else {
+        currentField += char
+        i++
+        continue
+      }
+    }
+  }
+
+  if (currentField.length > 0 || currentRow.length > 0) {
+    currentRow.push(currentField)
+    rows.push(currentRow)
+  }
+
+  return rows
+}
+
+/**
+ * Parses and validates an activity CSV dataset.
+ * Supports standard headers: title, category, description.
+ */
+export function parseActivitiesCsv(csvContent: string): {
+  valid: ParsedActivityRow[]
+  errors: ActivityCsvError[]
+  totalRows: number
+} {
+  const rows = parseCsvRows(csvContent)
+  const valid: ParsedActivityRow[] = []
+  const errors: ActivityCsvError[] = []
+
+  if (rows.length === 0) {
+    return { valid, errors: [{ row: 0, error: 'CSV file is empty.' }], totalRows: 0 }
+  }
+
+  // Find header indices
+  const headerRow = rows[0].map(h => h.trim().toLowerCase())
+  const titleIdx = headerRow.findIndex(h => h === 'title' || h === 'activity title' || h === 'activity_title' || h === 'activity')
+  const categoryIdx = headerRow.findIndex(h => h === 'category' || h === 'activity category' || h === 'activity_category')
+  const descIdx = headerRow.findIndex(h => h === 'description' || h === 'desc' || h === 'notes')
+
+  if (titleIdx === -1 || categoryIdx === -1) {
+    const missing: string[] = []
+    if (titleIdx === -1) missing.push('title')
+    if (categoryIdx === -1) missing.push('category')
+    return {
+      valid,
+      errors: [{ row: 1, error: `Missing required CSV header(s): ${missing.join(', ')}.` }],
+      totalRows: 0
+    }
+  }
+
+  let dataRowCount = 0
+  for (let r = 1; r < rows.length; r++) {
+    const row = rows[r]
+    // Skip completely empty lines
+    if (row.length === 0 || (row.length === 1 && !row[0].trim())) {
+      continue
+    }
+
+    dataRowCount++
+    const rowNum = r + 1 // 1-based index matching human line numbering
+    const title = (row[titleIdx] || '').trim()
+    const category = (row[categoryIdx] || '').trim()
+    const description = descIdx !== -1 && row[descIdx] ? row[descIdx].trim() : undefined
+
+    if (!title && !category) {
+      // Entirely blank data row
+      continue
+    }
+
+    if (!title) {
+      errors.push({ row: rowNum, error: 'Activity title is required and cannot be blank.' })
+      continue
+    }
+
+    if (!category) {
+      errors.push({ row: rowNum, error: 'Activity category is required and cannot be blank.' })
+      continue
+    }
+
+    valid.push({
+      rowNumber: rowNum,
+      title,
+      category,
+      description: description || undefined
+    })
+  }
+
+  return { valid, errors, totalRows: dataRowCount }
+}
+
 export const activityService = {
   generateCode: generateSessionCode,
   calculateEffectiveLockTime,
@@ -94,12 +266,22 @@ export const activityService = {
   },
 
   async createActivity(params: CreateActivityParams, userId: string): Promise<ActivityDefinition> {
+    const cleanTitle = (params.title || '').trim()
+    const cleanCategory = (params.category || '').trim()
+
+    if (!cleanTitle) {
+      throw new Error('Activity title is required.')
+    }
+    if (!cleanCategory) {
+      throw new Error('Activity category is required and cannot be blank.')
+    }
+
     const { data, error } = await supabase
       .from('activities')
       .insert({
-        title: params.title.trim(),
+        title: cleanTitle,
         description: params.description?.trim() || null,
-        category: params.category,
+        category: cleanCategory,
         default_participating_units: params.defaultParticipatingUnits || null,
         created_by: userId
       })
@@ -115,6 +297,66 @@ export const activityService = {
       defaultParticipatingUnits: data.default_participating_units,
       createdBy: data.created_by,
       createdAt: data.created_at
+    }
+  },
+
+  async importActivitiesFromCsv(csvContent: string, userId: string): Promise<ActivityImportResult> {
+    const { valid, errors, totalRows } = parseActivitiesCsv(csvContent)
+
+    if (valid.length === 0) {
+      return {
+        totalRows,
+        successCount: 0,
+        errorCount: errors.length,
+        errors,
+        importedActivities: []
+      }
+    }
+
+    // Insert records in batches or individually to isolate errors
+    const insertPayload = valid.map(v => ({
+      title: v.title,
+      category: v.category,
+      description: v.description || null,
+      created_by: userId
+    }))
+
+    const { data, error } = await supabase
+      .from('activities')
+      .insert(insertPayload)
+      .select()
+
+    if (error) {
+      // If batch insert fails, record error for all valid rows
+      errors.push({
+        row: 0,
+        error: `Database insert failed: ${error.message}`
+      })
+      return {
+        totalRows,
+        successCount: 0,
+        errorCount: errors.length,
+        errors,
+        importedActivities: []
+      }
+    }
+
+    const createdList: ActivityDefinition[] = (data || []).map((d: any) => ({
+      id: d.id,
+      title: d.title,
+      description: d.description,
+      category: d.category,
+      defaultParticipatingUnits: d.default_participating_units,
+      createdBy: d.created_by,
+      createdAt: d.created_at
+    }))
+
+    return {
+      totalRows,
+      successCount: createdList.length,
+      errorCount: errors.length,
+      errors,
+      importedActivities: createdList
     }
   },
 

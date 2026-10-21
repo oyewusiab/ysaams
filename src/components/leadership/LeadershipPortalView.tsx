@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useMemo } from 'react'
 import {
   LayoutDashboard,
   Calendar,
@@ -22,7 +22,9 @@ import {
   Search,
   Loader2,
   Radio,
-  ExternalLink
+  ExternalLink,
+  Upload,
+  FileSpreadsheet
 } from 'lucide-react'
 import { useAuth } from '../../context/AuthContext'
 import {
@@ -31,13 +33,14 @@ import {
   UserProfile,
   MemberRecord,
   ActivityDefinition,
+  STANDARD_ACTIVITY_CATEGORIES,
   ActivitySession,
   AppRole
 } from '../../types/database'
 import { authService } from '../../services/authService'
 import { adminService } from '../../services/adminService'
 import { memberService } from '../../services/memberService'
-import { activityService } from '../../services/activityService'
+import { activityService, parseActivitiesCsv, ActivityImportResult } from '../../services/activityService'
 import { attendanceService } from '../../services/attendanceService'
 import { reportService } from '../../services/reportService'
 import { ReportingWorkspace } from '../reporting/ReportingWorkspace'
@@ -175,8 +178,14 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
 
   // 5. Activity Creation Form
   const [newActTitle, setNewActTitle] = useState('')
-  const [newActCategory, setNewActCategory] = useState<'spiritual' | 'social' | 'service' | 'sports' | 'temple' | 'educational' | 'other'>('spiritual')
+  const [newActCategory, setNewActCategory] = useState<string>('spiritual')
   const [newActDesc, setNewActDesc] = useState('')
+
+  // Activity CSV Import State
+  const [showActivityCsvModal, setShowActivityCsvModal] = useState(false)
+  const [activityCsvText, setActivityCsvText] = useState('')
+  const [isImportingActivities, setIsImportingActivities] = useState(false)
+  const [_activityImportResult, setActivityImportResult] = useState<ActivityImportResult | null>(null)
 
   // 6. Session Creation Form
   const [newSessActivityId, setNewSessActivityId] = useState('')
@@ -188,6 +197,23 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
   const [newSessMaxTerminals, setNewSessMaxTerminals] = useState(2)
   const [newSessVisitorEnabled, setNewSessVisitorEnabled] = useState(true)
   const [newSessSelectedUnits, setNewSessSelectedUnits] = useState<string[]>([])
+
+  // Dynamic Category Suggestions derived from standard categories + existing activities
+  const categorySuggestions = useMemo(() => {
+    const set = new Set<string>(STANDARD_ACTIVITY_CATEGORIES)
+    activities.forEach(a => {
+      if (a.category && a.category.trim()) {
+        set.add(a.category.trim())
+      }
+    })
+    return Array.from(set).sort((a, b) => a.localeCompare(b))
+  }, [activities])
+
+  // Parsed CSV rows preview
+  const parsedCsvPreview = useMemo(() => {
+    if (!activityCsvText.trim()) return null
+    return parseActivitiesCsv(activityCsvText)
+  }, [activityCsvText])
 
   // 7. Initiate, Reopen, Cancel, Postpone & Adjust Session State
   const [activeSessionCodes, setActiveSessionCodes] = useState<Record<string, string>>(() => getAllActiveSessionCodes())
@@ -714,25 +740,68 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
 
   const handleCreateActivity = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!canManageActivities || !newActTitle.trim() || isSubmittingActivity) return
+    if (!canManageActivities || !newActTitle.trim() || !newActCategory.trim() || isSubmittingActivity) return
     setIsSubmittingActivity(true)
     try {
       await activityService.createActivity(
         {
-          title: newActTitle,
-          category: newActCategory,
-          description: newActDesc
+          title: newActTitle.trim(),
+          category: newActCategory.trim(),
+          description: newActDesc.trim() || undefined
         },
         user!.id
       )
       setNewActTitle('')
       setNewActDesc('')
+      setNewActCategory('spiritual')
       await loadCurrentSubpathData()
       setStatusMsg({ type: 'success', text: 'Activity definition created.' })
     } catch (err: any) {
       setStatusMsg({ type: 'error', text: err?.message || 'Failed to create activity' })
     } finally {
       setIsSubmittingActivity(false)
+    }
+  }
+
+  const handleActivityCsvFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = (event) => {
+      const text = event.target?.result as string
+      setActivityCsvText(text || '')
+      setActivityImportResult(null)
+    }
+    reader.readAsText(file)
+  }
+
+  const handleExecuteActivityCsvImport = async () => {
+    if (!activityCsvText.trim() || !user?.id || isImportingActivities) return
+    setIsImportingActivities(true)
+    try {
+      const res = await activityService.importActivitiesFromCsv(activityCsvText, user.id)
+      setActivityImportResult(res)
+      if (res.successCount > 0) {
+        setStatusMsg({
+          type: 'success',
+          text: `Successfully imported ${res.successCount} ${res.successCount === 1 ? 'activity' : 'activities'}${res.errorCount > 0 ? ` (${res.errorCount} row(s) had errors)` : ''}.`
+        })
+        await loadCurrentSubpathData()
+        if (res.errorCount === 0) {
+          setShowActivityCsvModal(false)
+          setActivityCsvText('')
+          setActivityImportResult(null)
+        }
+      } else {
+        setStatusMsg({
+          type: 'error',
+          text: `Activity import failed: ${res.errors.map(err => `Row ${err.row}: ${err.error}`).join('; ')}`
+        })
+      }
+    } catch (err: any) {
+      setStatusMsg({ type: 'error', text: err?.message || 'Failed to import activities from CSV.' })
+    } finally {
+      setIsImportingActivities(false)
     }
   }
 
@@ -1268,7 +1337,20 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                 {/* Activity Definition Form */}
                 <form onSubmit={handleCreateActivity} className="bg-slate-950 border border-slate-800 p-4 rounded-xl space-y-3">
-                  <h3 className="text-xs font-bold text-white uppercase tracking-wider">Create Activity Template</h3>
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-xs font-bold text-white uppercase tracking-wider">Create Activity Template</h3>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowActivityCsvModal(true)
+                        setActivityImportResult(null)
+                      }}
+                      className="px-2.5 py-1 bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-700 rounded-md text-[11px] font-medium flex items-center space-x-1.5 transition-colors"
+                    >
+                      <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-400" />
+                      <span>Import CSV</span>
+                    </button>
+                  </div>
                   <div>
                     <label className="block text-[11px] text-slate-300 uppercase mb-1">Title</label>
                     <input
@@ -1280,20 +1362,25 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
                     />
                   </div>
                   <div>
-                    <label className="block text-[11px] text-slate-300 uppercase mb-1">Category</label>
-                    <select
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="block text-[11px] text-slate-300 uppercase">Category</label>
+                      <span className="text-[10px] text-slate-400">Select or type custom (e.g. Gathering Place)</span>
+                    </div>
+                    <input
+                      type="text"
+                      list="activity-category-suggestions"
                       value={newActCategory}
-                      onChange={(e) => setNewActCategory(e.target.value as any)}
-                      className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-lg text-xs text-white"
-                    >
-                      <option value="spiritual">Spiritual</option>
-                      <option value="social">Social</option>
-                      <option value="service">Service</option>
-                      <option value="sports">Sports</option>
-                      <option value="temple">Temple</option>
-                      <option value="educational">Educational</option>
-                      <option value="other">Other</option>
-                    </select>
+                      onChange={(e) => setNewActCategory(e.target.value)}
+                      placeholder="e.g. Gathering Place, Skill Acquisition, Spiritual..."
+                      className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-lg text-xs text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500"
+                    />
+                    <datalist id="activity-category-suggestions">
+                      {categorySuggestions.map(cat => (
+                        <option key={cat} value={cat}>
+                          {cat.charAt(0).toUpperCase() + cat.slice(1)}
+                        </option>
+                      ))}
+                    </datalist>
                   </div>
                   <div>
                     <label className="block text-[11px] text-slate-300 uppercase mb-1">Description</label>
@@ -1478,6 +1565,162 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
             ) : (
               <div className="p-3.5 bg-slate-950 border border-slate-800 rounded-xl text-xs text-slate-400">
                 Viewing scheduled activities and sessions. Creating activities or initiating terminal codes requires Stake Presidency, System Admin, or YSA Leader authorization.
+              </div>
+            )}
+
+{/* Activity CSV Import Modal */}
+            {showActivityCsvModal && (
+              <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+                <div className="bg-slate-950 border border-slate-800 rounded-2xl w-full max-w-2xl p-6 space-y-4 shadow-2xl overflow-y-auto max-h-[90vh]">
+                  <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+                    <div className="flex items-center space-x-2.5">
+                      <FileSpreadsheet className="w-5 h-5 text-emerald-400" />
+                      <h3 className="text-sm font-bold text-white uppercase tracking-wider">Import Activities from CSV</h3>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowActivityCsvModal(false)
+                        setActivityCsvText('')
+                        setActivityImportResult(null)
+                      }}
+                      className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-900"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+
+                  <p className="text-xs text-slate-400 leading-relaxed">
+                    Upload a CSV file containing activity definitions. New and custom categories (such as <strong className="text-emerald-300">Gathering Place</strong> or <strong className="text-emerald-300">Skill Acquisition</strong>) are supported alongside standard categories.
+                  </p>
+
+                  <div className="p-3 bg-slate-900/60 border border-slate-800 rounded-xl space-y-2">
+                    <div className="text-[11px] font-semibold text-slate-300">Expected CSV Format:</div>
+                    <pre className="text-[10px] text-slate-400 font-mono bg-slate-950 p-2 rounded border border-slate-800 overflow-x-auto">
+                      title,category,description{`\n`}
+                      "Stake Gathering Place","Gathering Place","Weekly activity center"{`\n`}
+                      "Skill Acquisition Workshop","Skill Acquisition","Vocational training"{`\n`}
+                      "Stake YSA Sports Night","sports","Friendly football and volleyball"
+                    </pre>
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] text-slate-300 uppercase mb-1.5 font-medium">Select CSV File</label>
+                    <input
+                      type="file"
+                      accept=".csv,text/csv"
+                      onChange={handleActivityCsvFileChange}
+                      className="w-full text-xs text-slate-300 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-emerald-600 file:text-white hover:file:bg-emerald-500 cursor-pointer"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] text-slate-300 uppercase mb-1 font-medium">Or Paste CSV Content</label>
+                    <textarea
+                      rows={5}
+                      value={activityCsvText}
+                      onChange={(e) => {
+                        setActivityCsvText(e.target.value)
+                        setActivityImportResult(null)
+                      }}
+                      placeholder="Paste CSV text here..."
+                      className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-lg text-xs text-white font-mono placeholder-slate-600 focus:outline-none focus:border-emerald-500"
+                    />
+                  </div>
+
+                  {/* Preview Section */}
+                  {parsedCsvPreview && (
+                    <div className="space-y-2 border-t border-slate-800 pt-3">
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="font-semibold text-white">Parsed Preview:</span>
+                        <div className="flex items-center space-x-3 text-[11px]">
+                          <span className="text-emerald-400 font-medium">Valid: {parsedCsvPreview.valid.length}</span>
+                          {parsedCsvPreview.errors.length > 0 && (
+                            <span className="text-rose-400 font-medium">Errors: {parsedCsvPreview.errors.length}</span>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Display Row-by-Row Errors */}
+                      {parsedCsvPreview.errors.length > 0 && (
+                        <div className="bg-rose-950/40 border border-rose-900/60 rounded-lg p-2.5 space-y-1 text-xs text-rose-300 max-h-32 overflow-y-auto">
+                          <div className="font-bold flex items-center space-x-1">
+                            <AlertCircle className="w-3.5 h-3.5" />
+                            <span>Row Validation Issues:</span>
+                          </div>
+                          <ul className="list-disc pl-4 space-y-0.5 text-[11px]">
+                            {parsedCsvPreview.errors.map((err, idx) => (
+                              <li key={idx}>Row {err.row}: {err.error}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+
+                      {/* Valid Rows Preview Table */}
+                      {parsedCsvPreview.valid.length > 0 && (
+                        <div className="max-h-36 overflow-y-auto border border-slate-800 rounded-lg">
+                          <table className="w-full text-left text-xs">
+                            <thead className="bg-slate-900 text-slate-400 text-[10px] uppercase">
+                              <tr>
+                                <th className="p-1.5">Line</th>
+                                <th className="p-1.5">Title</th>
+                                <th className="p-1.5">Category</th>
+                                <th className="p-1.5">Description</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-800/60">
+                              {parsedCsvPreview.valid.map((r, i) => (
+                                <tr key={i} className="hover:bg-slate-900/40 text-slate-300">
+                                  <td className="p-1.5 font-mono text-[10px] text-slate-500">{r.rowNumber}</td>
+                                  <td className="p-1.5 font-medium text-white">{r.title}</td>
+                                  <td className="p-1.5">
+                                    <span className="px-1.5 py-0.5 bg-slate-800 rounded text-[10px] text-emerald-300 font-mono">
+                                      {r.category}
+                                    </span>
+                                  </td>
+                                  <td className="p-1.5 text-slate-400 truncate max-w-[150px]">{r.description || '—'}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Actions */}
+                  <div className="flex items-center justify-end space-x-3 pt-3 border-t border-slate-800">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowActivityCsvModal(false)
+                        setActivityCsvText('')
+                        setActivityImportResult(null)
+                      }}
+                      className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-slate-300 rounded-lg text-xs"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isImportingActivities || !parsedCsvPreview || parsedCsvPreview.valid.length === 0}
+                      onClick={handleExecuteActivityCsvImport}
+                      className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded-lg text-xs font-semibold flex items-center space-x-1.5"
+                    >
+                      {isImportingActivities ? (
+                        <>
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          <span>Importing...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Upload className="w-3.5 h-3.5" />
+                          <span>Import {parsedCsvPreview?.valid.length || 0} Activities</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
               </div>
             )}
 

@@ -22,7 +22,8 @@ import {
   StakeUnit,
   ActivityDefinition,
   ActivitySession,
-  MemberRecord
+  MemberRecord,
+  STANDARD_ACTIVITY_CATEGORIES
 } from '../../types/database'
 import {
   reportService,
@@ -90,6 +91,24 @@ export const ReportingWorkspace: React.FC<ReportingWorkspaceProps> = ({
   members
 }) => {
   const { hasStakeWideReadAccess, reportUnitFilter } = useAuth()
+
+  // Dynamically derive available activity categories from standard categories + activities prop
+  const availableCategories = useMemo(() => {
+    const catMap = new Map<string, string>()
+    STANDARD_ACTIVITY_CATEGORIES.forEach(c => {
+      catMap.set(c.toLowerCase(), c.charAt(0).toUpperCase() + c.slice(1))
+    })
+    activities.forEach(a => {
+      if (a.category && a.category.trim()) {
+        const trimmed = a.category.trim()
+        const lower = trimmed.toLowerCase()
+        if (!catMap.has(lower)) {
+          catMap.set(lower, trimmed)
+        }
+      }
+    })
+    return Array.from(catMap.entries()).map(([value, label]) => ({ value, label }))
+  }, [activities])
 
   // Filter & Control States
   const [criteria, setCriteria] = useState<ReportFilterCriteria>(INITIAL_CRITERIA)
@@ -791,18 +810,16 @@ export const ReportingWorkspace: React.FC<ReportingWorkspaceProps> = ({
                 <div>
                   <span className="text-[11px] text-slate-400">Activity Category:</span>
                   <select
-                    value={criteria.activityCategory || 'all'}
+                    value={criteria.activityCategory?.toLowerCase() || 'all'}
                     onChange={(e) => setCriteria(prev => ({ ...prev, activityCategory: e.target.value }))}
                     className="w-full mt-1 px-2.5 py-1.5 bg-slate-900 border border-slate-800 rounded-lg text-xs text-white"
                   >
                     <option value="all">All Categories</option>
-                    <option value="spiritual">Spiritual</option>
-                    <option value="social">Social</option>
-                    <option value="service">Service</option>
-                    <option value="sports">Sports</option>
-                    <option value="temple">Temple</option>
-                    <option value="educational">Educational</option>
-                    <option value="other">Other</option>
+                    {availableCategories.map(cat => (
+                      <option key={cat.value} value={cat.value}>
+                        {cat.label}
+                      </option>
+                    ))}
                   </select>
                 </div>
                 <div>

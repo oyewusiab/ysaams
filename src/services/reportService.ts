@@ -347,9 +347,10 @@ export const reportService = {
       sessionList = sessionList.filter((s: any) => criteria.selectedActivityIds.includes(s.activity_id))
     }
     if (criteria.activityCategory && criteria.activityCategory !== 'all') {
+      const targetCat = criteria.activityCategory.trim().toLowerCase()
       sessionList = sessionList.filter((s: any) => {
         const act = activityMap.get(s.activity_id)
-        return act?.category === criteria.activityCategory
+        return (act?.category || '').trim().toLowerCase() === targetCat
       })
     }
 

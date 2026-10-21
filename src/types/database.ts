@@ -68,11 +68,23 @@ export interface MemberRecord {
   updatedAt?: string
 }
 
+export const STANDARD_ACTIVITY_CATEGORIES = [
+  'spiritual',
+  'social',
+  'service',
+  'sports',
+  'temple',
+  'educational',
+  'other'
+] as const
+
+export type StandardActivityCategory = typeof STANDARD_ACTIVITY_CATEGORIES[number]
+
 export interface ActivityDefinition {
   id: string
   title: string
   description?: string | null
-  category: 'spiritual' | 'social' | 'service' | 'sports' | 'temple' | 'educational' | 'other'
+  category: string
   defaultParticipatingUnits?: string[] | null
   createdBy: string
   createdAt: string
