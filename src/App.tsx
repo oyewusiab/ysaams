@@ -164,7 +164,7 @@ export const AppContent: React.FC = () => {
   // 2. Terminal Redeemed Route
   if (currentPath === '/terminal' || activeTerminalCode !== null) {
     return (
-      <div className="min-h-screen flex flex-col bg-slate-950">
+      <div className="min-h-screen flex flex-col bg-slate-50 text-slate-900">
         <Navbar currentPath={currentPath} onNavigate={navigateTo} />
         <main className="flex-1">
           <TerminalView
@@ -186,7 +186,7 @@ export const AppContent: React.FC = () => {
 
   if (isPublicRoot || initialCode !== null) {
     return (
-      <div className="min-h-screen flex flex-col bg-slate-950">
+      <div className="min-h-screen flex flex-col bg-slate-50 text-slate-900">
         <Navbar currentPath={currentPath} onNavigate={navigateTo} />
         <main className="flex-1">
           <PublicAttendanceView
@@ -206,27 +206,27 @@ export const AppContent: React.FC = () => {
 
   // 4. Unknown Top-Level Route (404 Not Found)
   return (
-    <div className="min-h-screen flex flex-col bg-slate-950">
+    <div className="min-h-screen flex flex-col bg-slate-50 text-slate-900">
       <Navbar currentPath={currentPath} onNavigate={navigateTo} />
       <main className="flex-1 flex items-center justify-center p-6">
-        <div className="max-w-md w-full bg-slate-900 border border-slate-800 rounded-2xl p-8 text-center shadow-xl">
-          <div className="w-14 h-14 bg-red-950/60 border border-red-800/80 rounded-2xl flex items-center justify-center mx-auto mb-4 text-red-400">
+        <div className="max-w-md w-full bg-white border border-slate-200 rounded-3xl p-8 text-center shadow-xl shadow-slate-200/50">
+          <div className="w-14 h-14 bg-red-50 border border-red-200 rounded-2xl flex items-center justify-center mx-auto mb-4 text-red-600">
             <AlertCircle className="w-7 h-7" />
           </div>
-          <h2 className="text-xl font-bold text-white mb-2">Page Not Found</h2>
-          <p className="text-sm text-slate-400 mb-6">
-            The requested page <code className="text-slate-300 bg-slate-950 px-1.5 py-0.5 rounded border border-slate-800 font-mono text-xs">{currentPath}</code> does not exist.
+          <h2 className="text-xl font-bold text-slate-900 mb-2">Page Not Found</h2>
+          <p className="text-sm text-slate-600 mb-6">
+            The requested page <code className="text-slate-800 bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200 font-mono text-xs">{currentPath}</code> does not exist.
           </p>
           <div className="flex flex-col sm:flex-row gap-3 justify-center">
             <button
               onClick={() => navigateTo('/')}
-              className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl text-xs font-semibold transition"
+              className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-200 rounded-xl text-xs font-semibold transition cursor-pointer"
             >
               Public Check-in
             </button>
             <button
               onClick={() => navigateTo('/la')}
-              className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-semibold transition"
+              className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-semibold transition cursor-pointer"
             >
               Leadership Portal
             </button>

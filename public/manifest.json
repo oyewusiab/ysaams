@@ -1,0 +1,26 @@
+{
+  "name": "YSA Attendance Management System",
+  "short_name": "YSA AMS",
+  "description": "Attendance Management System for Abeokuta Nigeria Obantoko Stake YSA",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f8fafc",
+  "theme_color": "#059669",
+  "icons": [
+    {
+      "src": "/favicon_green_bg.png",
+      "sizes": "90x81",
+      "type": "image/png"
+    },
+    {
+      "src": "/Favicon_white_bg.png",
+      "sizes": "162x135",
+      "type": "image/png"
+    },
+    {
+      "src": "/YSA AMS logo.png",
+      "sizes": "535x403",
+      "type": "image/png"
+    }
+  ]
+}

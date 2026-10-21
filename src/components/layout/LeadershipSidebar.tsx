@@ -16,8 +16,7 @@ import {
   LogOut,
   Sun,
   Moon,
-  ExternalLink,
-  CheckCircle2
+  ExternalLink
 } from 'lucide-react'
 import { useAuth } from '../../context/AuthContext'
 import { useTheme } from '../../context/ThemeContext'
@@ -131,13 +130,11 @@ export const LeadershipSidebar: React.FC<LeadershipSidebarProps> = ({
             <Menu className="w-5 h-5" />
           </button>
           <div className="flex items-center space-x-2">
-            <div className="w-7 h-7 rounded-lg bg-emerald-600 flex items-center justify-center text-white font-bold text-xs shadow-xs">
-              <CheckCircle2 className="w-4 h-4 text-white" />
-            </div>
-            <div>
-              <span className="font-bold text-slate-900 dark:text-white text-sm">YSA AMS</span>
-              <span className="text-[10px] text-slate-500 dark:text-slate-400 block -mt-1">Obantoko Stake</span>
-            </div>
+            <img
+              src={theme === 'dark' ? '/ams_logo_horizontal_green_bg.png' : '/ams_logo_horizontal_light_bg.png'}
+              alt="YSA AMS"
+              className="h-7 w-auto max-w-[140px] object-contain"
+            />
           </div>
         </div>
 
@@ -183,13 +180,11 @@ export const LeadershipSidebar: React.FC<LeadershipSidebarProps> = ({
       >
         <div className="p-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
           <div className="flex items-center space-x-2.5">
-            <div className="w-8 h-8 rounded-xl bg-emerald-600 flex items-center justify-center text-white shadow-xs">
-              <CheckCircle2 className="w-5 h-5 text-white" />
-            </div>
-            <div>
-              <h2 className="text-sm font-bold text-slate-900 dark:text-white">YSA AMS</h2>
-              <p className="text-[10px] text-slate-500 dark:text-slate-400">Abeokuta Nigeria Obantoko Stake</p>
-            </div>
+            <img
+              src={theme === 'dark' ? '/ams_logo_horizontal_green_bg.png' : '/ams_logo_horizontal_light_bg.png'}
+              alt="YSA AMS"
+              className="h-8 w-auto max-w-[150px] object-contain"
+            />
           </div>
           <button
             type="button"
@@ -291,14 +286,18 @@ export const LeadershipSidebar: React.FC<LeadershipSidebarProps> = ({
         {/* Brand Header */}
         <div className="h-16 px-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between shrink-0">
           <div className="flex items-center space-x-3 overflow-hidden">
-            <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-emerald-600 to-teal-500 flex items-center justify-center shadow-xs shrink-0 text-white">
-              <CheckCircle2 className="w-5 h-5 text-white" />
-            </div>
-            {!isCollapsed && (
-              <div className="min-w-0">
-                <h1 className="text-sm font-bold text-slate-900 dark:text-white tracking-tight truncate">YSA AMS</h1>
-                <p className="text-[10px] text-slate-500 dark:text-slate-400 truncate">Obantoko Stake</p>
-              </div>
+            {!isCollapsed ? (
+              <img
+                src={theme === 'dark' ? '/ams_logo_horizontal_green_bg.png' : '/ams_logo_horizontal_light_bg.png'}
+                alt="YSA AMS"
+                className="h-8 w-auto max-w-[150px] object-contain"
+              />
+            ) : (
+              <img
+                src="/favicon_green_bg.png"
+                alt="YSA AMS"
+                className="w-8 h-8 rounded-lg object-contain shadow-xs"
+              />
             )}
           </div>
 

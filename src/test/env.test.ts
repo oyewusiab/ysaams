@@ -11,7 +11,8 @@ describe('Environment Configuration Safety', () => {
     expect(envConfig).toBeDefined()
     expect(typeof envConfig.timezone).toBe('string')
     expect(typeof envConfig.stakeName).toBe('string')
-    expect(envConfig.siteUrl).toBe('https://ysaams.vercel.app')
+    const expectedSiteUrl = (import.meta.env.VITE_PUBLIC_SITE_URL || PRODUCTION_SITE_URL).trim().replace(/\/+$/, '')
+    expect(envConfig.siteUrl).toBe(expectedSiteUrl)
   })
 
   it('exports canonical production site and auth redirect URLs', () => {
