@@ -85,6 +85,7 @@ export interface ActivityDefinition {
   title: string
   description?: string | null
   category: string
+  classOptions?: string[] | null
   defaultParticipatingUnits?: string[] | null
   createdBy: string
   createdAt: string
@@ -94,6 +95,9 @@ export interface ActivityDefinition {
 export interface ActivitySession {
   id: string
   activityId: string
+  activityTitle?: string
+  activityCategory?: string
+  classOptions?: string[] | null
   sessionTitle: string
   sessionDate: string
   startTime: string
@@ -158,6 +162,7 @@ export interface AttendanceRecord {
   isNonMember: boolean
   unitId?: string | null
   unitName?: string | null
+  selectedClass?: string | null
   checkInTime: string
   recordedByTerminalId?: string | null
   isManual?: boolean
@@ -171,6 +176,7 @@ export interface SessionVisitor {
   isChurchMember: boolean
   invitingUnitId?: string | null
   invitingUnitName?: string | null
+  selectedClass?: string | null
   recordedByTerminalId?: string | null
   createdAt: string
 }

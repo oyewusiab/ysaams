@@ -97,7 +97,7 @@ describe('Requirement 1 & 5: Responsive Left Sidebar & Permission-Based Navigati
       'settings'
     ])
 
-    // 4. Bishop: unit-scoped, includes attendance, excludes users and audit-logs
+    // 4. Bishop: unit-scoped view-only, excludes attendance, users and audit-logs
     const bishopAccess = deriveLeadershipAccess(['bishop'], [
       { id: 'ua-2', userId: 'u2', unitId: 'unit-obantoko', assignedRole: 'bishop', createdAt: '2026-10-01' }
     ])
@@ -108,14 +108,13 @@ describe('Requirement 1 & 5: Responsive Left Sidebar & Permission-Based Navigati
     expect(bishopItems.map((i) => i.id)).toEqual([
       'dashboard',
       'activities',
-      'attendance',
       'members',
       'reports',
       'units',
       'settings'
     ])
 
-    // 5. Branch President: branch-scoped, includes attendance, excludes users and audit-logs
+    // 5. Branch President: branch-scoped view-only, excludes attendance, users and audit-logs
     const bpAccess = deriveLeadershipAccess(['branch_president'], [
       { id: 'ua-3', userId: 'u3', unitId: 'unit-alabata', assignedRole: 'branch_president', createdAt: '2026-10-01' }
     ])
@@ -126,7 +125,6 @@ describe('Requirement 1 & 5: Responsive Left Sidebar & Permission-Based Navigati
     expect(bpItems.map((i) => i.id)).toEqual([
       'dashboard',
       'activities',
-      'attendance',
       'members',
       'reports',
       'units',

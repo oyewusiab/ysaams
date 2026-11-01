@@ -1,6 +1,6 @@
 /**
  * Comprehensive Reporting, Registers, Analytics and Export Service.
- * Abeokuta Nigeria Obantoko Stake — YSA AMS (Phase 4)
+ * Abeokuta Nigeria Obantoko Stake — YSA AMS (Phase 4 & Skill Acquisition Multi-Class Enhancement)
  * Strict timezone: 'Africa/Lagos'
  */
 
@@ -45,7 +45,13 @@ export interface IndividualAttendanceHistory {
   fullName: string
   homeUnitName: string
   attendedCount: number
-  sessions: { sessionId: string; sessionTitle: string; sessionDate: string; checkInTime: string }[]
+  sessions: {
+    sessionId: string
+    sessionTitle: string
+    sessionDate: string
+    checkInTime: string
+    selectedClass?: string | null
+  }[]
 }
 
 export type ReportType =
@@ -80,6 +86,7 @@ export type SortField =
   | 'recordedUnitName'
   | 'attendanceType'
   | 'sessionTitle'
+  | 'selectedClass'
 
 export type GroupByOption =
   | 'none'
@@ -88,6 +95,7 @@ export type GroupByOption =
   | 'by_unit'
   | 'by_month'
   | 'by_type'
+  | 'by_class'
 
 export interface ReportFilterCriteria {
   reportType: ReportType
@@ -100,6 +108,7 @@ export interface ReportFilterCriteria {
   selectedActivityIds: string[]
   selectedSessionIds: string[]
   activityCategory?: string
+  selectedClass?: string
   memberVisitorClassification: 'all' | 'members_only' | 'visitors_only'
   selectedMemberIds: string[]
   nameQuery: string
@@ -126,8 +135,120 @@ export interface UnifiedAttendanceRecord {
   sessionTitle: string
   sessionDate: string
   checkInTime: string
+  selectedClass?: string | null
   contactPhone?: string | null
   isChurchMember?: boolean
+}
+
+export interface ClassBreakdownItem {
+  className: string
+  recordsCount: number
+  membersCount: number
+  visitorsCount: number
+  percentage: number
+  isConfigured: boolean
+}
+
+export interface ClassBreakdownSummary {
+  classes: ClassBreakdownItem[]
+  totalWithClass: number
+  totalUnassigned: number
+  totalRecords: number
+  reconciled: boolean
+}
+
+/**
+ * Pure helper to compute Skill Acquisition class-level attendance breakdown.
+ * - Preserves configured classes (even with 0 attendance) and any historical classes
+ *   present in attendance records (even if later removed from configuration).
+ * - Never silently assigns missing or invalid class selections to another class.
+ * - Ensures class totals reconcile with overall attendance.
+ */
+export function computeClassBreakdown(
+  records: Pick<UnifiedAttendanceRecord, 'attendanceType' | 'selectedClass'>[],
+  configuredClasses?: string[] | null
+): ClassBreakdownSummary {
+  const map = new Map<
+    string,
+    {
+      className: string
+      recordsCount: number
+      membersCount: number
+      visitorsCount: number
+      isConfigured: boolean
+    }
+  >()
+
+  if (Array.isArray(configuredClasses)) {
+    for (const raw of configuredClasses) {
+      const clean = (raw || '').trim()
+      if (!clean) continue
+      const key = clean.toLowerCase()
+      if (!map.has(key)) {
+        map.set(key, {
+          className: clean,
+          recordsCount: 0,
+          membersCount: 0,
+          visitorsCount: 0,
+          isConfigured: true
+        })
+      }
+    }
+  }
+
+  let totalWithClass = 0
+  let totalUnassigned = 0
+
+  for (const r of records) {
+    const rawClass = (r.selectedClass || '').trim()
+    if (!rawClass) {
+      totalUnassigned += 1
+      continue
+    }
+
+    totalWithClass += 1
+    const key = rawClass.toLowerCase()
+    const existing = map.get(key) || {
+      className: rawClass,
+      recordsCount: 0,
+      membersCount: 0,
+      visitorsCount: 0,
+      isConfigured: false
+    }
+    existing.recordsCount += 1
+    if (r.attendanceType === 'member') {
+      existing.membersCount += 1
+    } else {
+      existing.visitorsCount += 1
+    }
+    map.set(key, existing)
+  }
+
+  const totalRecords = records.length
+  const denominator = totalRecords > 0 ? totalRecords : 0
+
+  const classes: ClassBreakdownItem[] = Array.from(map.values())
+    .sort((a, b) => {
+      if (b.recordsCount !== a.recordsCount) return b.recordsCount - a.recordsCount
+      return a.className.localeCompare(b.className)
+    })
+    .map((item) => ({
+      ...item,
+      percentage:
+        denominator > 0
+          ? Math.round((item.recordsCount / denominator) * 1000) / 10
+          : 0
+    }))
+
+  const sumOfClasses = classes.reduce((acc, c) => acc + c.recordsCount, 0)
+
+  return {
+    classes,
+    totalWithClass,
+    totalUnassigned,
+    totalRecords,
+    reconciled: sumOfClasses === totalWithClass && totalWithClass + totalUnassigned === totalRecords
+  }
 }
 
 export interface ReportSummaryMetrics {
@@ -153,6 +274,7 @@ export interface ChartDataset {
   trendTimeline: { periodLabel: string; recordsCount: number; membersCount: number; visitorsCount: number }[]
   unitBreakdown: { unitId: string; unitName: string; recordsCount: number; percentage: number }[]
   activityBreakdown: { activityId: string; activityTitle: string; recordsCount: number }[]
+  classBreakdown?: ClassBreakdownItem[]
   typeBreakdown: { members: number; visitors: number; memberPct: number; visitorPct: number }
 }
 
@@ -180,6 +302,7 @@ const PRESETS_STORAGE_KEY = 'ysaams_saved_report_presets'
 export const reportService = {
   calculateAttendancePercentage,
   getMonthDateRange,
+  computeClassBreakdown,
 
   // --- Saved Configurations (Presets) ---
   getSavedPresets(): SavedReportPreset[] {
@@ -307,7 +430,7 @@ export const reportService = {
     // 2. Fetch Activities and Sessions
     let sessionsQuery = supabase
       .from('activity_sessions')
-      .select('id, activity_id, session_title, session_date, start_time, scheduled_end_time, status, participating_units')
+      .select('id, activity_id, session_title, session_date, start_time, scheduled_end_time, status, participating_units, class_options')
       .order('session_date', { ascending: false })
 
     if (startDate) {
@@ -334,12 +457,12 @@ export const reportService = {
 
     // Fetch activities for these sessions
     const activityIdsInSessions = Array.from(new Set(sessionList.map((s: any) => s.activity_id)))
-    let activitiesQuery = supabase.from('activities').select('id, title, category')
+    let activitiesQuery = supabase.from('activities').select('id, title, category, class_options')
     if (activityIdsInSessions.length > 0) {
       activitiesQuery = activitiesQuery.in('id', activityIdsInSessions)
     }
     const { data: rawActivities } = await activitiesQuery
-    const activityMap = new Map<string, { id: string; title: string; category: string }>()
+    const activityMap = new Map<string, { id: string; title: string; category: string; class_options?: string[] | null }>()
     ;(rawActivities || []).forEach((a: any) => activityMap.set(a.id, a))
 
     // Filter sessions by activity ID and activity category if selected
@@ -368,7 +491,7 @@ export const reportService = {
     if (shouldFetchMembers && matchingSessionIds.length > 0 && targetUnitIds.length > 0) {
       let attQuery = supabase
         .from('attendance_records')
-        .select('id, session_id, member_id, recorded_unit_id, check_in_time, created_at')
+        .select('id, session_id, member_id, recorded_unit_id, selected_class, check_in_time, created_at')
         .in('session_id', matchingSessionIds)
         .in('recorded_unit_id', targetUnitIds)
 
@@ -381,7 +504,7 @@ export const reportService = {
 
       // Fetch member profiles
       const memberIds = Array.from(new Set(attRecords.map((r: any) => r.member_id)))
-      let memberMap = new Map<string, any>()
+      const memberMap = new Map<string, any>()
       if (memberIds.length > 0) {
         const { data: rawMembers } = await supabase
           .from('members')
@@ -415,6 +538,7 @@ export const reportService = {
           sessionTitle: session.session_title,
           sessionDate: session.session_date,
           checkInTime: r.check_in_time,
+          selectedClass: r.selected_class || null,
           isChurchMember: true
         })
       }
@@ -431,7 +555,7 @@ export const reportService = {
     if (shouldFetchVisitors && !skipVisitorsForMemberSelection && matchingSessionIds.length > 0) {
       let visQuery = supabase
         .from('session_visitors')
-        .select('id, session_id, full_name, contact_phone, is_church_member, inviting_unit_id, created_at')
+        .select('id, session_id, full_name, contact_phone, is_church_member, inviting_unit_id, selected_class, created_at')
         .in('session_id', matchingSessionIds)
 
       if (targetUnitIds.length > 0) {
@@ -462,19 +586,28 @@ export const reportService = {
           sessionTitle: session.session_title,
           sessionDate: session.session_date,
           checkInTime: v.created_at,
+          selectedClass: v.selected_class || null,
           contactPhone: v.contact_phone,
           isChurchMember: v.is_church_member
         })
       }
     }
 
-    // 5. Name Query Filtering
+    // 5. Name Query & Skill Acquisition Class Filtering
     let filteredRecords = unifiedRecords
     if (criteria.nameQuery && criteria.nameQuery.trim().length > 0) {
       const q = criteria.nameQuery.trim().toLowerCase()
       filteredRecords = filteredRecords.filter(r =>
         r.attendeeName.toLowerCase().includes(q) ||
-        (r.memberNumber && r.memberNumber.toLowerCase().includes(q))
+        (r.memberNumber && r.memberNumber.toLowerCase().includes(q)) ||
+        (r.selectedClass && r.selectedClass.toLowerCase().includes(q))
+      )
+    }
+
+    if (criteria.selectedClass && criteria.selectedClass !== 'all') {
+      const targetClass = criteria.selectedClass.trim().toLowerCase()
+      filteredRecords = filteredRecords.filter(
+        r => (r.selectedClass || '').trim().toLowerCase() === targetClass
       )
     }
 
@@ -490,7 +623,6 @@ export const reportService = {
       if (r.attendanceType === 'member' && r.attendeeId) {
         distinctMemberIds.add(r.attendeeId)
       } else {
-        // For visitors without a member UUID, identify distinctly by (id) or (fullName + phone)
         const key = r.attendeeId || `${r.attendeeName.toLowerCase().trim()}_${r.contactPhone || ''}`
         distinctVisitorKeys.add(key)
       }
@@ -508,7 +640,6 @@ export const reportService = {
     let comparablePrevPeriodRecords = 0
     if (startDate && endDate) {
       const prev = getComparablePreviousPeriod(startDate, endDate)
-      // Fetch prior count for comparable scope
       const { data: prevSessions } = await supabase
         .from('activity_sessions')
         .select('id')
@@ -540,6 +671,24 @@ export const reportService = {
       comparablePrevPeriodRecords
     }
 
+    // Collect configured classes across sessions/activities in scope
+    const configuredClassSet = new Set<string>()
+    for (const s of sessionList) {
+      const act = activityMap.get(s.activity_id)
+      const classes = Array.isArray(s.class_options)
+        ? s.class_options
+        : Array.isArray(act?.class_options)
+        ? act.class_options
+        : []
+      for (const c of classes) {
+        if (c && c.trim()) configuredClassSet.add(c.trim())
+      }
+    }
+    const classBreakdownSummary = computeClassBreakdown(
+      filteredRecords,
+      Array.from(configuredClassSet)
+    )
+
     // 7. Factual Dynamic Insights Generation
     const insights: string[] = []
     insights.push(`Recorded ${totalRecords} total attendance event${totalRecords === 1 ? '' : 's'} across ${heldSessionsCount} held session${heldSessionsCount === 1 ? '' : 's'}.`)
@@ -564,6 +713,14 @@ export const reportService = {
     const topActivities = Array.from(actCountMap.values()).sort((a, b) => b.count - a.count)
     if (topActivities.length > 0) {
       insights.push(`Top attended activity was "${topActivities[0].title}" with ${topActivities[0].count} check-ins.`)
+    }
+
+    // Skill Acquisition class insight if classes were recorded
+    if (classBreakdownSummary.totalWithClass > 0 && classBreakdownSummary.classes.length > 0) {
+      const topClass = classBreakdownSummary.classes[0]
+      insights.push(
+        `Skill Acquisition class breakdown: ${classBreakdownSummary.totalWithClass} class check-in${classBreakdownSummary.totalWithClass === 1 ? '' : 's'} across ${classBreakdownSummary.classes.filter(c => c.recordsCount > 0).length} active class${classBreakdownSummary.classes.filter(c => c.recordsCount > 0).length === 1 ? '' : 'es'} (leading class: ${topClass.className} with ${topClass.recordsCount}).`
+      )
     }
 
     // Unit with highest participation
@@ -614,6 +771,10 @@ export const reportService = {
         } else if (criteria.groupBy === 'by_type') {
           key = r.attendanceType
           title = r.attendanceType === 'member' ? 'Church Members' : 'Visitors & Friends'
+        } else if (criteria.groupBy === 'by_class') {
+          const cleanClass = (r.selectedClass || '').trim()
+          key = cleanClass ? cleanClass.toLowerCase() : '__no_class__'
+          title = cleanClass ? `Class: ${cleanClass}` : 'General Activity (No Class Selected)'
         }
 
         const g = groupedMap.get(key) || { title, records: [] }
@@ -704,6 +865,7 @@ export const reportService = {
         trendTimeline,
         unitBreakdown,
         activityBreakdown,
+        classBreakdown: classBreakdownSummary.classes,
         typeBreakdown
       },
       unitMonthlyStats
@@ -869,7 +1031,7 @@ export const reportService = {
 
     const { data: records } = await supabase
       .from('attendance_records')
-      .select('session_id, check_in_time, activity_sessions(session_title, session_date)')
+      .select('session_id, check_in_time, selected_class, activity_sessions(session_title, session_date)')
       .eq('member_id', memberId)
       .order('check_in_time', { ascending: false })
 
@@ -877,7 +1039,8 @@ export const reportService = {
       sessionId: r.session_id,
       sessionTitle: r.activity_sessions?.session_title || 'Session',
       sessionDate: r.activity_sessions?.session_date || '',
-      checkInTime: r.check_in_time
+      checkInTime: r.check_in_time,
+      selectedClass: r.selected_class || null
     }))
 
     return {
@@ -929,6 +1092,7 @@ export const reportService = {
         isChurchMember: v.is_church_member,
         invitingUnitId: v.inviting_unit_id,
         invitingUnitName: v.stake_units?.unit_name || (v.inviting_unit_id ? 'Unit' : 'Unassigned / Stake-wide'),
+        selectedClass: v.selected_class || null,
         recordedByTerminalId: v.recorded_by_terminal_id,
         createdAt: v.created_at,
         sessionTitle: v.activity_sessions?.session_title || 'Session',

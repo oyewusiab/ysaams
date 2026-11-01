@@ -13,6 +13,7 @@ export interface DerivedLeadershipAccess {
   isStakeClerk: boolean
   hasStakeWideReadAccess: boolean
   isClerkRoleOnly: boolean
+  isViewOnlyRoleOnly: boolean
   canManageActivities: boolean
   canManageMembers: boolean
   canRecordManualAttendance: boolean
@@ -45,12 +46,12 @@ export function deriveLeadershipAccess(
 
   const assignedUnitIds = Array.from(new Set(validAssignments.map((ua) => ua.unitId)))
 
+  // Requirement 6: bishop, branch_president, ward_clerk, and branch_clerk are strictly view-only.
+  // Only ysa_leader unit assignments confer unit-level operational write authority.
   const manageableUnitIds = Array.from(
     new Set(
       validAssignments
-        .filter((ua) =>
-          ['bishop', 'branch_president', 'ysa_leader'].includes(ua.assignedRole)
-        )
+        .filter((ua) => ua.assignedRole === 'ysa_leader')
         .map((ua) => ua.unitId)
     )
   )
@@ -71,6 +72,25 @@ export function deriveLeadershipAccess(
   )
   const isClerkRoleOnly = hasClerkRole && !hasNonClerkRole
 
+  // Explicitly tracks the four view-only roles (bishop, branch_president, ward_clerk, branch_clerk)
+  // while excluding stake_clerk, ysa_leader, stake_presidency, and system_admin.
+  const viewOnlyTargetRoles: AppRole[] = [
+    'bishop',
+    'branch_president',
+    'ward_clerk',
+    'branch_clerk'
+  ]
+  const excludedFromViewOnlyRoles: AppRole[] = [
+    'system_admin',
+    'stake_presidency',
+    'ysa_leader',
+    'stake_clerk'
+  ]
+  const isViewOnlyRoleOnly =
+    roles.length > 0 &&
+    roles.some((r) => viewOnlyTargetRoles.includes(r)) &&
+    !roles.some((r) => excludedFromViewOnlyRoles.includes(r))
+
   const reportUnitFilter: string[] | null = hasStakeWideReadAccess ? null : assignedUnitIds
 
   return {
@@ -79,6 +99,7 @@ export function deriveLeadershipAccess(
     isStakeClerk,
     hasStakeWideReadAccess,
     isClerkRoleOnly,
+    isViewOnlyRoleOnly,
     canManageActivities,
     canManageMembers,
     canRecordManualAttendance,

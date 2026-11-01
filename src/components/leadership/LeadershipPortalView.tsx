@@ -24,7 +24,8 @@ import {
   Radio,
   ExternalLink,
   Upload,
-  FileSpreadsheet
+  FileSpreadsheet,
+  BookOpen
 } from 'lucide-react'
 import { useAuth } from '../../context/AuthContext'
 import {
@@ -40,7 +41,15 @@ import {
 import { authService } from '../../services/authService'
 import { adminService } from '../../services/adminService'
 import { memberService } from '../../services/memberService'
-import { activityService, parseActivitiesCsv, ActivityImportResult } from '../../services/activityService'
+import {
+  activityService,
+  parseActivitiesCsv,
+  ActivityImportResult,
+  DEFAULT_SKILL_ACQUISITION_CLASSES,
+  isSkillAcquisitionActivity,
+  normalizeClassOptions,
+  validateSkillAcquisitionCheckInClass
+} from '../../services/activityService'
 import { attendanceService } from '../../services/attendanceService'
 import { reportService } from '../../services/reportService'
 import { ReportingWorkspace } from '../reporting/ReportingWorkspace'
@@ -73,7 +82,7 @@ export function getRolePermittedNavItems(
     { id: 'activities', label: 'Activities & Sessions', icon: Calendar }
   ]
 
-  // Authorized manual attendance check-in is relevant to presiding leaders, hidden for read-only clerks
+  // Authorized manual attendance check-in is only visible to roles with manual attendance permission (system_admin, stake_presidency, ysa_leader)
   if (access.canRecordManualAttendance) {
     items.push({ id: 'attendance', label: 'Authorized Check-in', icon: ClipboardCheck })
   }
@@ -150,6 +159,7 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
   // 1. Attendance Manual Check-in
   const [manualSessionId, setManualSessionId] = useState('')
   const [manualMemberId, setManualMemberId] = useState('')
+  const [manualSelectedClass, setManualSelectedClass] = useState('')
   const [manualNotes, setManualNotes] = useState('')
   const [isSubmittingManual, setIsSubmittingManual] = useState(false)
 
@@ -176,10 +186,19 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
   const [newMemberUnitId, setNewMemberUnitId] = useState('')
   const [newMemberNumber, setNewMemberNumber] = useState('')
 
-  // 5. Activity Creation Form
+  // 5. Activity Creation Form & Skill Acquisition Classes State
   const [newActTitle, setNewActTitle] = useState('')
   const [newActCategory, setNewActCategory] = useState<string>('spiritual')
   const [newActDesc, setNewActDesc] = useState('')
+  const [newActClasses, setNewActClasses] = useState<string[]>([])
+  const [newActClassInput, setNewActClassInput] = useState('')
+
+  // Edit Activity Classes Modal State
+  const [editClassesActivity, setEditClassesActivity] = useState<ActivityDefinition | null>(null)
+  const [editClassesList, setEditClassesList] = useState<string[]>([])
+  const [editClassInput, setEditClassInput] = useState('')
+  const [editClassesReason, setEditClassesReason] = useState('')
+  const [isSavingClasses, setIsSavingClasses] = useState(false)
 
   // Activity CSV Import State
   const [showActivityCsvModal, setShowActivityCsvModal] = useState(false)
@@ -291,10 +310,12 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
         syncActiveSessionCodes(sList.filter(s => s.status === 'active').map(s => s.id))
         setActiveSessionCodes(getAllActiveSessionCodes())
       } else if (currentSubpath === 'attendance') {
-        const [sList, mList] = await Promise.all([
+        const [aList, sList, mList] = await Promise.all([
+          activityService.listActivities(),
           activityService.listSessions(),
           memberService.listMembers(isStakeLeader ? null : manageableUnitIds)
         ])
+        setActivities(aList)
         const activeSessions = sList.filter(s => s.status === 'active')
         setSessions(activeSessions)
         setMembers(mList.filter(m => m.isActive))
@@ -647,13 +668,27 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
     return true
   })
 
-  // Scoped units available when registering members (strictly manageable units, excluding clerk-only assignments)
+  // Scoped units available when registering members (strictly manageable units, excluding view-only roles)
   const memberCreatableUnits = isStakeLeader
     ? units.filter(u => u.isActive)
     : units.filter(u => u.isActive && manageableUnitIds.includes(u.id))
 
   // Scoped members eligible for the currently selected manual check-in session
   const selectedManualSession = sessions.find(s => s.id === manualSessionId)
+  const selectedManualSessionActivity = selectedManualSession
+    ? activities.find(a => a.id === selectedManualSession.activityId)
+    : undefined
+  const manualSessionClasses = normalizeClassOptions(
+    selectedManualSession?.classOptions ?? selectedManualSessionActivity?.classOptions
+  )
+  const isManualSessionSkillAcquisition = selectedManualSession
+    ? isSkillAcquisitionActivity({
+        category: selectedManualSession.activityCategory ?? selectedManualSessionActivity?.category,
+        title: selectedManualSession.activityTitle ?? selectedManualSessionActivity?.title ?? selectedManualSession.sessionTitle,
+        classOptions: manualSessionClasses
+      })
+    : false
+
   const eligibleManualMembers = members.filter(m => {
     if (!m.isActive) return false
     if (
@@ -663,6 +698,12 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
       return selectedManualSession.participatingUnits.includes(m.homeUnitId)
     }
     return true
+  })
+
+  const isCreatingSkillAcquisition = isSkillAcquisitionActivity({
+    category: newActCategory,
+    title: newActTitle,
+    classOptions: newActClasses
   })
 
   // Handlers for modules
@@ -701,7 +742,7 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
     e.preventDefault()
     if (!canManageMembers || isSubmittingMember) {
       if (!canManageMembers) {
-        setStatusMsg({ type: 'error', text: 'Unauthorized: Clerk accounts have read-only access and cannot modify member census.' })
+        setStatusMsg({ type: 'error', text: 'Unauthorized: Your leadership role has view-only access and cannot modify member census.' })
       }
       return
     }
@@ -738,6 +779,13 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
     }
   }
 
+  const handleAddNewActClass = () => {
+    const clean = newActClassInput.trim()
+    if (!clean) return
+    setNewActClasses(prev => normalizeClassOptions([...prev, clean]))
+    setNewActClassInput('')
+  }
+
   const handleCreateActivity = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!canManageActivities || !newActTitle.trim() || !newActCategory.trim() || isSubmittingActivity) return
@@ -747,19 +795,56 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
         {
           title: newActTitle.trim(),
           category: newActCategory.trim(),
-          description: newActDesc.trim() || undefined
+          description: newActDesc.trim() || undefined,
+          classOptions: newActClasses.length > 0 ? newActClasses : undefined
         },
         user!.id
       )
       setNewActTitle('')
       setNewActDesc('')
       setNewActCategory('spiritual')
+      setNewActClasses([])
+      setNewActClassInput('')
       await loadCurrentSubpathData()
       setStatusMsg({ type: 'success', text: 'Activity definition created.' })
     } catch (err: any) {
       setStatusMsg({ type: 'error', text: err?.message || 'Failed to create activity' })
     } finally {
       setIsSubmittingActivity(false)
+    }
+  }
+
+  const handleSaveEditedClasses = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!canManageActivities || !editClassesActivity || isSavingClasses) return
+    if (editClassesList.length === 0) {
+      setStatusMsg({ type: 'error', text: 'Please configure at least one Skill Acquisition class.' })
+      return
+    }
+    setIsSavingClasses(true)
+    try {
+      const res = await activityService.updateActivityClasses(
+        editClassesActivity.id,
+        editClassesList,
+        editClassesReason.trim() || 'Updated Skill Acquisition class options'
+      )
+      if (res.success) {
+        setEditClassesActivity(null)
+        setEditClassesList([])
+        setEditClassInput('')
+        setEditClassesReason('')
+        await loadCurrentSubpathData()
+        setStatusMsg({
+          type: 'success',
+          text: 'Skill Acquisition class configuration updated and audited. Historical attendance attribution remains preserved.'
+        })
+      } else {
+        setStatusMsg({ type: 'error', text: res.error || 'Failed to update classes.' })
+      }
+    } catch (err: any) {
+      setStatusMsg({ type: 'error', text: err?.message || 'Failed to update classes.' })
+    } finally {
+      setIsSavingClasses(false)
     }
   }
 
@@ -815,6 +900,7 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
     setIsSubmittingSession(true)
     try {
       const clampedTerminals = Math.min(Math.max(1, Number(newSessMaxTerminals) || 2), 10)
+      const parentAct = activities.find(a => a.id === newSessActivityId)
       await activityService.createSession({
         activityId: newSessActivityId,
         sessionTitle: newSessTitle,
@@ -824,7 +910,8 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
         gracePeriodMinutes: Number(newSessGraceMinutes) || 0,
         maxTerminals: clampedTerminals,
         visitorRegistrationEnabled: newSessVisitorEnabled,
-        participatingUnits: newSessSelectedUnits.length > 0 ? newSessSelectedUnits : null
+        participatingUnits: newSessSelectedUnits.length > 0 ? newSessSelectedUnits : null,
+        classOptions: parentAct?.classOptions && parentAct.classOptions.length > 0 ? parentAct.classOptions : undefined
       })
       setNewSessTitle('')
       setNewSessSelectedUnits([])
@@ -1003,27 +1090,40 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
   const handleManualCheckIn = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!canRecordManualAttendance) {
-      setStatusMsg({ type: 'error', text: 'Unauthorized: Clerk accounts are read-only and cannot record manual check-ins.' })
+      setStatusMsg({ type: 'error', text: 'Unauthorized: Your leadership role has view-only access and cannot record manual check-ins.' })
       return
     }
     if (!manualSessionId.trim() || !manualMemberId.trim()) {
       setStatusMsg({ type: 'error', text: 'Active session and member are required.' })
       return
     }
+    if (isManualSessionSkillAcquisition) {
+      const classCheck = validateSkillAcquisitionCheckInClass({
+        isSkillAcquisition: true,
+        classOptions: manualSessionClasses,
+        selectedClass: manualSelectedClass
+      })
+      if (!classCheck.valid) {
+        setStatusMsg({ type: 'error', text: classCheck.error || 'Please select a Skill Acquisition class.' })
+        return
+      }
+    }
     setIsSubmittingManual(true)
     setStatusMsg(null)
     const result = await attendanceService.recordManualAttendance({
       sessionId: manualSessionId.trim(),
       memberId: manualMemberId.trim(),
-      notes: manualNotes.trim() || undefined
+      notes: manualNotes.trim() || undefined,
+      selectedClass: isManualSessionSkillAcquisition ? manualSelectedClass.trim() : undefined
     })
     setIsSubmittingManual(false)
     if (result.success && result.record) {
       setStatusMsg({
         type: 'success',
-        text: `Checked in: ${result.record.attendeeName} marked present.`
+        text: `Checked in: ${result.record.attendeeName} marked present${result.record.selectedClass ? ` (${result.record.selectedClass})` : ''}.`
       })
       setManualMemberId('')
+      setManualSelectedClass('')
       setManualNotes('')
     } else {
       setStatusMsg({
@@ -1327,6 +1427,7 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
               <div className="mb-6">
                 <LiveActiveSessionView
                   session={liveMonitorSession}
+                  activity={activities.find(a => a.id === liveMonitorSession.activityId) || null}
                   units={units}
                   activeCode={activeSessionCodes[liveMonitorSession.id]}
                   onClose={() => setLiveMonitorSession(null)}
@@ -1337,19 +1438,35 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                 {/* Activity Definition Form */}
                 <form onSubmit={handleCreateActivity} className="bg-slate-950 border border-slate-800 p-4 rounded-xl space-y-3">
-                  <div className="flex items-center justify-between">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
                     <h3 className="text-xs font-bold text-white uppercase tracking-wider">Create Activity Template</h3>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowActivityCsvModal(true)
-                        setActivityImportResult(null)
-                      }}
-                      className="px-2.5 py-1 bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-700 rounded-md text-[11px] font-medium flex items-center space-x-1.5 transition-colors"
-                    >
-                      <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-400" />
-                      <span>Import CSV</span>
-                    </button>
+                    <div className="flex items-center space-x-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setNewActTitle('Skill Acquisition')
+                          setNewActCategory('Skill Acquisition')
+                          setNewActDesc('Gathering Place')
+                          setNewActClasses([...DEFAULT_SKILL_ACQUISITION_CLASSES])
+                        }}
+                        className="px-2.5 py-1 bg-emerald-950 hover:bg-emerald-900 text-emerald-300 border border-emerald-800 rounded-md text-[11px] font-medium flex items-center space-x-1 transition-colors"
+                        title="Pre-fill Skill Acquisition at the Gathering Place with multi-class options"
+                      >
+                        <BookOpen className="w-3 h-3 text-emerald-400" />
+                        <span>Skill Acquisition Preset</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowActivityCsvModal(true)
+                          setActivityImportResult(null)
+                        }}
+                        className="px-2.5 py-1 bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-700 rounded-md text-[11px] font-medium flex items-center space-x-1.5 transition-colors"
+                      >
+                        <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-400" />
+                        <span>Import CSV</span>
+                      </button>
+                    </div>
                   </div>
                   <div>
                     <label className="block text-[11px] text-slate-300 uppercase mb-1">Title</label>
@@ -1357,21 +1474,21 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
                       type="text"
                       value={newActTitle}
                       onChange={(e) => setNewActTitle(e.target.value)}
-                      placeholder="e.g. Stake YSA Institute Night"
+                      placeholder="e.g. Skill Acquisition or Stake YSA Institute Night"
                       className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-lg text-xs text-white"
                     />
                   </div>
                   <div>
                     <div className="flex items-center justify-between mb-1">
                       <label className="block text-[11px] text-slate-300 uppercase">Category</label>
-                      <span className="text-[10px] text-slate-400">Select or type custom (e.g. Gathering Place)</span>
+                      <span className="text-[10px] text-slate-400">Select or type custom (e.g. Skill Acquisition)</span>
                     </div>
                     <input
                       type="text"
                       list="activity-category-suggestions"
                       value={newActCategory}
                       onChange={(e) => setNewActCategory(e.target.value)}
-                      placeholder="e.g. Gathering Place, Skill Acquisition, Spiritual..."
+                      placeholder="e.g. Skill Acquisition, Gathering Place, Spiritual..."
                       className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-lg text-xs text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500"
                     />
                     <datalist id="activity-category-suggestions">
@@ -1383,15 +1500,86 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
                     </datalist>
                   </div>
                   <div>
-                    <label className="block text-[11px] text-slate-300 uppercase mb-1">Description</label>
+                    <label className="block text-[11px] text-slate-300 uppercase mb-1">Location / Description</label>
                     <input
                       type="text"
                       value={newActDesc}
                       onChange={(e) => setNewActDesc(e.target.value)}
-                      placeholder="Optional notes or objectives"
+                      placeholder="e.g. Gathering Place"
                       className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-lg text-xs text-white"
                     />
                   </div>
+
+                  {/* Skill Acquisition Concurrent Classes Configurator */}
+                  {isCreatingSkillAcquisition && (
+                    <div className="p-3 bg-slate-900/80 border border-emerald-900/60 rounded-xl space-y-2.5">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[11px] font-bold text-emerald-300 uppercase tracking-wider flex items-center space-x-1.5">
+                          <BookOpen className="w-3.5 h-3.5" />
+                          <span>Configured Concurrent Classes</span>
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setNewActClasses(prev =>
+                              normalizeClassOptions([...prev, ...DEFAULT_SKILL_ACQUISITION_CLASSES])
+                            )
+                          }
+                          className="text-[10px] text-emerald-400 hover:text-emerald-300 underline"
+                        >
+                          Add Example Classes
+                        </button>
+                      </div>
+                      <p className="text-[11px] text-slate-400">
+                        All concurrent classes share one session and one activity code. Attendees select their class during check-in.
+                      </p>
+
+                      {newActClasses.length > 0 && (
+                        <div className="flex flex-wrap gap-1.5">
+                          {newActClasses.map((cls) => (
+                            <span
+                              key={cls}
+                              className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-md bg-emerald-950 text-emerald-300 border border-emerald-800 text-[11px] font-medium"
+                            >
+                              <span>{cls}</span>
+                              <button
+                                type="button"
+                                onClick={() => setNewActClasses(prev => prev.filter(c => c !== cls))}
+                                className="text-emerald-400 hover:text-rose-400 ml-1"
+                                aria-label={`Remove class ${cls}`}
+                              >
+                                ×
+                              </button>
+                            </span>
+                          ))}
+                        </div>
+                      )}
+
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          value={newActClassInput}
+                          onChange={(e) => setNewActClassInput(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault()
+                              handleAddNewActClass()
+                            }
+                          }}
+                          placeholder="Add a class (e.g. Barbing, Tailoring, ICT)..."
+                          className="flex-1 px-2.5 py-1.5 bg-slate-950 border border-slate-800 rounded-lg text-xs text-white"
+                        />
+                        <button
+                          type="button"
+                          onClick={handleAddNewActClass}
+                          className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-semibold"
+                        >
+                          Add Class
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
                   <button
                     type="submit"
                     disabled={isSubmittingActivity}
@@ -1420,11 +1608,26 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
                     <label className="block text-[11px] text-slate-300 uppercase mb-1">Activity</label>
                     <select
                       value={newSessActivityId}
-                      onChange={(e) => setNewSessActivityId(e.target.value)}
+                      onChange={(e) => {
+                        const actId = e.target.value
+                        setNewSessActivityId(actId)
+                        const chosen = activities.find(a => a.id === actId)
+                        if (chosen && !newSessTitle.trim()) {
+                          setNewSessTitle(
+                            chosen.description
+                              ? `${chosen.title} — ${chosen.description}`
+                              : chosen.title
+                          )
+                        }
+                      }}
                       className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-lg text-xs text-white"
                     >
                       <option value="">Select Activity</option>
-                      {activities.map(a => <option key={a.id} value={a.id}>{a.title} ({a.category})</option>)}
+                      {activities.map(a => (
+                        <option key={a.id} value={a.id}>
+                          {a.title} ({a.category}){a.classOptions && a.classOptions.length > 0 ? ` • ${a.classOptions.length} classes` : ''}
+                        </option>
+                      ))}
                     </select>
                   </div>
                   <div>
@@ -1433,7 +1636,7 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
                       type="text"
                       value={newSessTitle}
                       onChange={(e) => setNewSessTitle(e.target.value)}
-                      placeholder="e.g. Obantoko Stake YSA Gathering"
+                      placeholder="e.g. Skill Acquisition — Gathering Place"
                       className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-lg text-xs text-white"
                     />
                   </div>
@@ -1568,7 +1771,216 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
               </div>
             )}
 
-{/* Activity CSV Import Modal */}
+            {/* Activity Templates & Configured Skill Acquisition Classes */}
+            {activities.length > 0 && (
+              <div>
+                <h3 className="text-xs font-bold text-white uppercase tracking-wider mb-3">
+                  Activity Templates & Configured Classes
+                </h3>
+                <div className="bg-slate-950 border border-slate-800 rounded-xl overflow-hidden">
+                  <table className="w-full text-xs text-left text-slate-300">
+                    <thead className="bg-slate-900 border-b border-slate-800 uppercase text-[10px] text-slate-400">
+                      <tr>
+                        <th className="px-4 py-2.5">Activity Title</th>
+                        <th className="px-4 py-2.5">Category</th>
+                        <th className="px-4 py-2.5">Location / Description</th>
+                        <th className="px-4 py-2.5">Configured Classes</th>
+                        {canManageActivities && <th className="px-4 py-2.5 text-right">Configuration</th>}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {activities.map((act) => {
+                        const isSkillAct = isSkillAcquisitionActivity(act)
+                        const classes = normalizeClassOptions(act.classOptions)
+                        return (
+                          <tr key={act.id} className="border-b border-slate-900 hover:bg-slate-900/40">
+                            <td className="px-4 py-2.5 font-semibold text-white">{act.title}</td>
+                            <td className="px-4 py-2.5 capitalize">{act.category}</td>
+                            <td className="px-4 py-2.5 text-slate-400">{act.description || '—'}</td>
+                            <td className="px-4 py-2.5">
+                              {classes.length > 0 ? (
+                                <div className="flex flex-wrap gap-1">
+                                  {classes.map((cls) => (
+                                    <span
+                                      key={cls}
+                                      className="px-2 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-800 text-[10px] font-medium"
+                                    >
+                                      {cls}
+                                    </span>
+                                  ))}
+                                </div>
+                              ) : isSkillAct ? (
+                                <span className="text-[11px] text-amber-400">No classes configured yet</span>
+                              ) : (
+                                <span className="text-[11px] text-slate-600">Standard (Single Session)</span>
+                              )}
+                            </td>
+                            {canManageActivities && (
+                              <td className="px-4 py-2.5 text-right">
+                                {(isSkillAct || classes.length > 0) && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setEditClassesActivity(act)
+                                      setEditClassesList(
+                                        classes.length > 0 ? [...classes] : [...DEFAULT_SKILL_ACQUISITION_CLASSES]
+                                      )
+                                      setEditClassInput('')
+                                      setEditClassesReason('')
+                                    }}
+                                    className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-emerald-300 border border-slate-700 rounded text-[11px] font-semibold"
+                                  >
+                                    Configure Classes
+                                  </button>
+                                )}
+                              </td>
+                            )}
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {/* Edit Skill Acquisition Classes Modal */}
+            {editClassesActivity && (
+              <div
+                className="fixed inset-0 z-50 bg-black/75 backdrop-blur-xs flex items-center justify-center p-4"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="edit-classes-modal-title"
+              >
+                <form
+                  onSubmit={handleSaveEditedClasses}
+                  className="bg-slate-900 border border-emerald-800/80 rounded-2xl p-6 max-w-lg w-full shadow-2xl space-y-4"
+                >
+                  <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+                    <div>
+                      <h3 id="edit-classes-modal-title" className="text-sm font-bold text-white">
+                        Configure Skill Acquisition Classes — {editClassesActivity.title}
+                      </h3>
+                      <p className="text-[11px] text-slate-400">
+                        Updates apply to draft and active sessions. Historical attendance class attribution is never overwritten.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setEditClassesActivity(null)}
+                      className="text-slate-400 hover:text-white p-1"
+                      aria-label="Close modal"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <label className="text-[11px] font-bold text-slate-300 uppercase">Available Classes</label>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setEditClassesList(prev =>
+                            normalizeClassOptions([...prev, ...DEFAULT_SKILL_ACQUISITION_CLASSES])
+                          )
+                        }
+                        className="text-[10px] text-emerald-400 hover:text-emerald-300 underline"
+                      >
+                        Include Default Examples
+                      </button>
+                    </div>
+
+                    <div className="flex flex-wrap gap-1.5 p-2.5 bg-slate-950 border border-slate-800 rounded-xl min-h-[44px]">
+                      {editClassesList.map((cls) => (
+                        <span
+                          key={cls}
+                          className="inline-flex items-center space-x-1.5 px-2.5 py-1 rounded-lg bg-emerald-950 text-emerald-300 border border-emerald-800 text-xs font-medium"
+                        >
+                          <span>{cls}</span>
+                          <button
+                            type="button"
+                            onClick={() => setEditClassesList(prev => prev.filter(c => c !== cls))}
+                            className="text-emerald-400 hover:text-rose-400"
+                            aria-label={`Remove ${cls}`}
+                          >
+                            ×
+                          </button>
+                        </span>
+                      ))}
+                      {editClassesList.length === 0 && (
+                        <span className="text-xs text-slate-500">No classes added yet.</span>
+                      )}
+                    </div>
+
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={editClassInput}
+                        onChange={(e) => setEditClassInput(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault()
+                            const clean = editClassInput.trim()
+                            if (clean) {
+                              setEditClassesList(prev => normalizeClassOptions([...prev, clean]))
+                              setEditClassInput('')
+                            }
+                          }
+                        }}
+                        placeholder="Type new class name (e.g. Photography, Baking)..."
+                        className="flex-1 px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-xs text-white"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const clean = editClassInput.trim()
+                          if (clean) {
+                            setEditClassesList(prev => normalizeClassOptions([...prev, clean]))
+                            setEditClassInput('')
+                          }
+                        }}
+                        className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-semibold"
+                      >
+                        Add
+                      </button>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-300 uppercase mb-1">
+                      Audit Justification Note
+                    </label>
+                    <input
+                      type="text"
+                      value={editClassesReason}
+                      onChange={(e) => setEditClassesReason(e.target.value)}
+                      placeholder="e.g. Added Catering and ICT classes for Gathering Place session"
+                      className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-xs text-white"
+                    />
+                  </div>
+
+                  <div className="flex justify-end space-x-2 pt-2 border-t border-slate-800">
+                    <button
+                      type="button"
+                      onClick={() => setEditClassesActivity(null)}
+                      className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs font-semibold"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={isSavingClasses || editClassesList.length === 0}
+                      className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded-lg text-xs font-semibold"
+                    >
+                      {isSavingClasses ? 'Saving...' : 'Save Class Configuration'}
+                    </button>
+                  </div>
+                </form>
+              </div>
+            )}
+
+            {/* Activity CSV Import Modal */}
             {showActivityCsvModal && (
               <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
                 <div className="bg-slate-950 border border-slate-800 rounded-2xl w-full max-w-2xl p-6 space-y-4 shadow-2xl overflow-y-auto max-h-[90vh]">
@@ -1591,16 +2003,16 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
                   </div>
 
                   <p className="text-xs text-slate-400 leading-relaxed">
-                    Upload a CSV file containing activity definitions. New and custom categories (such as <strong className="text-emerald-300">Gathering Place</strong> or <strong className="text-emerald-300">Skill Acquisition</strong>) are supported alongside standard categories.
+                    Upload a CSV file containing activity definitions. New and custom categories (such as <strong className="text-emerald-300">Gathering Place</strong> or <strong className="text-emerald-300">Skill Acquisition</strong>) are supported alongside standard categories. For multi-class Skill Acquisition, use <code className="text-emerald-300">Skill Acquisition: Barbing, Tailoring, Shoe Making, Catering, ICT</code> in the <code className="text-slate-300">category</code> column or include a <code className="text-slate-300">classes</code> column.
                   </p>
 
                   <div className="p-3 bg-slate-900/60 border border-slate-800 rounded-xl space-y-2">
                     <div className="text-[11px] font-semibold text-slate-300">Expected CSV Format:</div>
                     <pre className="text-[10px] text-slate-400 font-mono bg-slate-950 p-2 rounded border border-slate-800 overflow-x-auto">
-                      title,category,description{`\n`}
-                      "Stake Gathering Place","Gathering Place","Weekly activity center"{`\n`}
-                      "Skill Acquisition Workshop","Skill Acquisition","Vocational training"{`\n`}
-                      "Stake YSA Sports Night","sports","Friendly football and volleyball"
+                      title,description,category{`\n`}
+                      "Skill Acquisition","Practical training at the Gathering Place","Skill Acquisition: Barbing, Tailoring, Shoe Making, Catering, ICT"{`\n`}
+                      "Stake Gathering Place","Weekly activity center","Gathering Place"{`\n`}
+                      "Stake YSA Sports Night","Friendly football and volleyball","sports"
                     </pre>
                   </div>
 
@@ -1665,6 +2077,7 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
                                 <th className="p-1.5">Line</th>
                                 <th className="p-1.5">Title</th>
                                 <th className="p-1.5">Category</th>
+                                <th className="p-1.5">Classes</th>
                                 <th className="p-1.5">Description</th>
                               </tr>
                             </thead>
@@ -1677,6 +2090,15 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
                                     <span className="px-1.5 py-0.5 bg-slate-800 rounded text-[10px] text-emerald-300 font-mono">
                                       {r.category}
                                     </span>
+                                  </td>
+                                  <td className="p-1.5">
+                                    {r.classOptions && r.classOptions.length > 0 ? (
+                                      <span className="text-[10px] text-emerald-400">
+                                        {r.classOptions.join(', ')}
+                                      </span>
+                                    ) : (
+                                      <span className="text-[10px] text-slate-500">—</span>
+                                    )}
                                   </td>
                                   <td className="p-1.5 text-slate-400 truncate max-w-[150px]">{r.description || '—'}</td>
                                 </tr>
@@ -1742,14 +2164,31 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
                   <tbody>
                     {sessions.map((s) => {
                       const generatedCode = activeSessionCodes[s.id]
+                      const sessionClasses = normalizeClassOptions(
+                        s.classOptions ?? activities.find(a => a.id === s.activityId)?.classOptions
+                      )
                       return (
                         <tr key={s.id} className="border-b border-slate-900 hover:bg-slate-900/50">
                           <td className="px-4 py-3 font-semibold text-white">
-                            {s.sessionTitle}
-                            {s.participatingUnits && s.participatingUnits.length > 0 && (
-                              <span className="ml-2 text-[10px] text-slate-400 font-normal">
-                                ({s.participatingUnits.length} unit{s.participatingUnits.length > 1 ? 's' : ''})
-                              </span>
+                            <div>
+                              {s.sessionTitle}
+                              {s.participatingUnits && s.participatingUnits.length > 0 && (
+                                <span className="ml-2 text-[10px] text-slate-400 font-normal">
+                                  ({s.participatingUnits.length} unit{s.participatingUnits.length > 1 ? 's' : ''})
+                                </span>
+                              )}
+                            </div>
+                            {sessionClasses.length > 0 && (
+                              <div className="flex flex-wrap gap-1 mt-1">
+                                {sessionClasses.map(cls => (
+                                  <span
+                                    key={cls}
+                                    className="px-1.5 py-0.2 rounded text-[9px] font-medium bg-emerald-950/90 text-emerald-300 border border-emerald-800/80"
+                                  >
+                                    {cls}
+                                  </span>
+                                ))}
+                              </div>
                             )}
                           </td>
                           <td className="px-4 py-3">
@@ -2325,9 +2764,9 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
                   <Shield className="w-7 h-7 text-emerald-400" />
                 </div>
                 <div>
-                  <h3 className="text-base font-bold text-white mb-1">Clerk Read-Only Reporting Scope</h3>
+                  <h3 className="text-base font-bold text-white mb-1">View-Only Leadership Scope</h3>
                   <p className="text-xs text-slate-400 max-w-md mx-auto leading-relaxed">
-                    Direct manual attendance check-in is restricted to presiding leaders (Stake Presidency, Bishops, Branch Presidents, and YSA Leaders). As a Clerk, you have complete read-only reporting and audit access.
+                    Direct manual attendance check-in is restricted to Stake Presidency, System Administrators, and assigned YSA Leaders. Bishops, Branch Presidents, and Clerks have view-only access within their authorized scope.
                   </p>
                 </div>
                 <div className="flex justify-center gap-3 pt-2">
@@ -2369,6 +2808,7 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
                       onChange={(e) => {
                         setManualSessionId(e.target.value)
                         setManualMemberId('')
+                        setManualSelectedClass('')
                       }}
                       className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-xl text-xs text-white"
                     >
@@ -2394,6 +2834,27 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
                       ))}
                     </select>
                   </div>
+
+                  {isManualSessionSkillAcquisition && (
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-300 uppercase mb-1">
+                        Skill Acquisition Class (Required)
+                      </label>
+                      <select
+                        aria-label="Skill Acquisition Class"
+                        value={manualSelectedClass}
+                        onChange={(e) => setManualSelectedClass(e.target.value)}
+                        className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-xl text-xs text-white"
+                      >
+                        <option value="">Select Skill Acquisition Class</option>
+                        {manualSessionClasses.map(cls => (
+                          <option key={cls} value={cls}>
+                            {cls}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
 
                   <div>
                     <label className="block text-xs font-semibold text-slate-300 uppercase mb-1">Leader Notes (Optional)</label>
@@ -2518,7 +2979,7 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
               </form>
             ) : (
               <div className="p-3.5 bg-slate-950 border border-slate-800 rounded-xl text-xs text-slate-400">
-                Read-only member census view for your assigned scope. Registering or archiving members requires Stake Presidency, System Admin, Bishop, Branch President, or assigned YSA Leader authority.
+                Read-only member census view for your assigned scope. Registering or archiving members requires Stake Presidency, System Admin, or assigned YSA Leader authority.
               </div>
             )}
 

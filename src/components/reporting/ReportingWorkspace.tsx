@@ -75,6 +75,7 @@ const INITIAL_CRITERIA: ReportFilterCriteria = {
   selectedActivityIds: [],
   selectedSessionIds: [],
   activityCategory: 'all',
+  selectedClass: 'all',
   memberVisitorClassification: 'all',
   selectedMemberIds: [],
   nameQuery: '',
@@ -120,6 +121,42 @@ export const ReportingWorkspace: React.FC<ReportingWorkspaceProps> = ({
   const [reportData, setReportData] = useState<ComprehensiveReportData | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
+
+  // Dynamically derive available Skill Acquisition classes from activities, sessions, and report results
+  const availableSkillClasses = useMemo(() => {
+    const classMap = new Map<string, string>()
+    activities.forEach(a => {
+      if (Array.isArray(a.classOptions)) {
+        a.classOptions.forEach(cls => {
+          const clean = (cls || '').trim()
+          if (clean && !classMap.has(clean.toLowerCase())) {
+            classMap.set(clean.toLowerCase(), clean)
+          }
+        })
+      }
+    })
+    _sessions.forEach(s => {
+      if (Array.isArray(s.classOptions)) {
+        s.classOptions.forEach(cls => {
+          const clean = (cls || '').trim()
+          if (clean && !classMap.has(clean.toLowerCase())) {
+            classMap.set(clean.toLowerCase(), clean)
+          }
+        })
+      }
+    })
+    if (reportData?.charts.classBreakdown) {
+      reportData.charts.classBreakdown.forEach(cb => {
+        if (cb.className && cb.className !== 'Not Applicable / Unassigned') {
+          const clean = cb.className.trim()
+          if (clean && !classMap.has(clean.toLowerCase())) {
+            classMap.set(clean.toLowerCase(), clean)
+          }
+        }
+      })
+    }
+    return Array.from(classMap.values())
+  }, [activities, _sessions, reportData?.charts.classBreakdown])
 
   // Presets & Saved Configurations
   const [savedPresets, setSavedPresets] = useState<SavedReportPreset[]>([])
@@ -279,11 +316,15 @@ export const ReportingWorkspace: React.FC<ReportingWorkspaceProps> = ({
   const getExportMetadata = () => {
     const title = REPORT_TYPE_LABELS[criteria.reportType] || 'Attendance Report'
     const period = reportService.resolveEffectiveDateRange(criteria).periodLabel
-    const scopeLabel = hasStakeWideReadAccess
+    const baseScopeLabel = hasStakeWideReadAccess
       ? criteria.selectedUnitIds.length > 0
         ? `Selected Units (${criteria.selectedUnitIds.length})`
         : 'Stake-Wide (All Units)'
       : availableUnits.map(u => u.unitName).join(', ')
+    const scopeLabel =
+      criteria.selectedClass && criteria.selectedClass !== 'all'
+        ? `${baseScopeLabel} • Class: ${criteria.selectedClass === '__unassigned__' ? 'Unassigned' : criteria.selectedClass}`
+        : baseScopeLabel
 
     return {
       title,
@@ -305,6 +346,7 @@ export const ReportingWorkspace: React.FC<ReportingWorkspaceProps> = ({
     { key: 'homeUnitName', label: 'Home Unit' },
     { key: 'activityTitle', label: 'Activity' },
     { key: 'activityCategory', label: 'Category' },
+    { key: 'selectedClass', label: 'Skill Acquisition Class' },
     { key: 'sessionTitle', label: 'Session' },
     { key: 'sessionDate', label: 'Session Date' },
     { key: 'checkInTime', label: 'Check-In Timestamp' },
@@ -356,6 +398,13 @@ export const ReportingWorkspace: React.FC<ReportingWorkspaceProps> = ({
       chips.push({
         label: `Category: ${criteria.activityCategory}`,
         onRemove: () => setCriteria(prev => ({ ...prev, activityCategory: 'all' }))
+      })
+    }
+
+    if (criteria.selectedClass && criteria.selectedClass !== 'all') {
+      chips.push({
+        label: `Skill Class: ${criteria.selectedClass === '__unassigned__' ? 'Unassigned / Non-Skill' : criteria.selectedClass}`,
+        onRemove: () => setCriteria(prev => ({ ...prev, selectedClass: 'all' }))
       })
     }
 
@@ -805,7 +854,7 @@ export const ReportingWorkspace: React.FC<ReportingWorkspaceProps> = ({
 
             {/* Activity & Category Filter */}
             <div className="space-y-2">
-              <label className="block font-bold text-slate-300">Activity Category & Lifecycle</label>
+              <label className="block font-bold text-slate-300">Activity Category, Class & Lifecycle</label>
               <div className="space-y-2">
                 <div>
                   <span className="text-[11px] text-slate-400">Activity Category:</span>
@@ -820,6 +869,23 @@ export const ReportingWorkspace: React.FC<ReportingWorkspaceProps> = ({
                         {cat.label}
                       </option>
                     ))}
+                  </select>
+                </div>
+                <div>
+                  <span className="text-[11px] text-slate-400">Skill Acquisition Class:</span>
+                  <select
+                    aria-label="Filter by Skill Acquisition Class"
+                    value={criteria.selectedClass || 'all'}
+                    onChange={(e) => setCriteria(prev => ({ ...prev, selectedClass: e.target.value }))}
+                    className="w-full mt-1 px-2.5 py-1.5 bg-slate-900 border border-slate-800 rounded-lg text-xs text-white"
+                  >
+                    <option value="all">All Classes / Activities</option>
+                    {availableSkillClasses.map(cls => (
+                      <option key={cls} value={cls}>
+                        {cls}
+                      </option>
+                    ))}
+                    <option value="__unassigned__">Unassigned / Non-Skill Activity</option>
                   </select>
                 </div>
                 <div>
@@ -1036,6 +1102,10 @@ export const ReportingWorkspace: React.FC<ReportingWorkspaceProps> = ({
             setCriteria(prev => ({ ...prev, selectedActivityIds: [actId] }))
             runReport({ ...criteria, selectedActivityIds: [actId] })
           }}
+          onSelectClass={(clsName) => {
+            setCriteria(prev => ({ ...prev, selectedClass: clsName }))
+            runReport({ ...criteria, selectedClass: clsName })
+          }}
         />
       )}
 
@@ -1134,6 +1204,7 @@ export const ReportingWorkspace: React.FC<ReportingWorkspaceProps> = ({
               <option value="none">Grouping: None (Flat List)</option>
               <option value="by_person">Group by Attendee</option>
               <option value="by_activity">Group by Activity</option>
+              <option value="by_class">Group by Skill Class</option>
               <option value="by_unit">Group by Unit</option>
               <option value="by_month">Group by Month</option>
               <option value="by_type">Group by Member / Visitor</option>
@@ -1211,6 +1282,17 @@ export const ReportingWorkspace: React.FC<ReportingWorkspaceProps> = ({
                     </th>
                     <th
                       className="px-4 py-3 cursor-pointer hover:text-white"
+                      onClick={() => handleSort('selectedClass')}
+                    >
+                      <div className="flex items-center space-x-1">
+                        <span>Skill Class</span>
+                        {criteria.sortBy === 'selectedClass' && (
+                          <span>{criteria.sortDirection === 'asc' ? '▲' : '▼'}</span>
+                        )}
+                      </div>
+                    </th>
+                    <th
+                      className="px-4 py-3 cursor-pointer hover:text-white"
                       onClick={() => handleSort('sessionDate')}
                     >
                       <div className="flex items-center space-x-1">
@@ -1260,6 +1342,15 @@ export const ReportingWorkspace: React.FC<ReportingWorkspaceProps> = ({
                         <div className="font-medium text-white">{record.activityTitle}</div>
                         <div className="text-[10px] text-slate-400 capitalize">{record.activityCategory}</div>
                       </td>
+                      <td className="px-4 py-2.5">
+                        {record.selectedClass ? (
+                          <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-950 text-emerald-300 border border-emerald-800">
+                            {record.selectedClass}
+                          </span>
+                        ) : (
+                          <span className="text-slate-600 text-[11px]">—</span>
+                        )}
+                      </td>
                       <td className="px-4 py-2.5 text-slate-300">{formatLagosDateDisplay(record.sessionDate)}</td>
                       <td className="px-4 py-2.5 font-mono text-[11px] text-slate-400">
                         {formatLagosTimestampDisplay(record.checkInTime)}
@@ -1268,7 +1359,7 @@ export const ReportingWorkspace: React.FC<ReportingWorkspaceProps> = ({
                   ))}
                   {paginatedRecords.length === 0 && (
                     <tr>
-                      <td colSpan={6} className="px-4 py-8 text-center text-slate-500">
+                      <td colSpan={7} className="px-4 py-8 text-center text-slate-500">
                         {isLoading ? 'Loading records...' : 'No attendance records matching the current filter criteria.'}
                       </td>
                     </tr>
@@ -1333,6 +1424,7 @@ export const ReportingWorkspace: React.FC<ReportingWorkspaceProps> = ({
                       <th className="px-4 py-2.5">Type</th>
                       <th className="px-4 py-2.5">Unit</th>
                       <th className="px-4 py-2.5">Activity / Session</th>
+                      <th className="px-4 py-2.5">Skill Class</th>
                       <th className="px-4 py-2.5">Date</th>
                       <th className="px-4 py-2.5">Check-In Time</th>
                     </tr>
@@ -1354,6 +1446,15 @@ export const ReportingWorkspace: React.FC<ReportingWorkspaceProps> = ({
                         </td>
                         <td className="px-4 py-2">{r.recordedUnitName}</td>
                         <td className="px-4 py-2">{r.activityTitle}</td>
+                        <td className="px-4 py-2">
+                          {r.selectedClass ? (
+                            <span className="px-1.5 py-0.2 rounded text-[10px] bg-emerald-950 text-emerald-300">
+                              {r.selectedClass}
+                            </span>
+                          ) : (
+                            <span className="text-slate-600">—</span>
+                          )}
+                        </td>
                         <td className="px-4 py-2">{formatLagosDateDisplay(r.sessionDate)}</td>
                         <td className="px-4 py-2 font-mono text-[11px]">
                           {formatLagosTimestampDisplay(r.checkInTime)}

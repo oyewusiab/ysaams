@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect, useRef, useMemo } from 'react'
 import {
   CheckCircle2,
   User,
@@ -10,17 +10,26 @@ import {
   Sparkles,
   ArrowRight,
   HeartHandshake,
-  Loader2
+  Loader2,
+  BookOpen
 } from 'lucide-react'
 import { attendanceService, humanizeTerminalError } from '../../services/attendanceService'
 import { adminService } from '../../services/adminService'
 import { memberService } from '../../services/memberService'
+import {
+  isSkillAcquisitionActivity,
+  normalizeClassOptions,
+  validateSkillAcquisitionCheckInClass
+} from '../../services/activityService'
 import { StakeUnit, MemberRecord } from '../../types/database'
 import { formatAttendeeFirstName, getActivityWelcomeMessage } from '../../lib/terminalPersonalization'
 
 interface TerminalViewProps {
   sessionTitle?: string
   sessionDate?: string
+  activityTitle?: string | null
+  activityCategory?: string | null
+  classOptions?: string[] | null
   onReleaseTerminal: () => void
 }
 
@@ -29,18 +38,23 @@ interface ConfirmedAttendee {
   firstName: string
   isNonMember: boolean
   unitName?: string | null
+  selectedClass?: string | null
   checkInTime: string
 }
 
 export const TerminalView: React.FC<TerminalViewProps> = ({
   sessionTitle = 'Active YSA Activity Session',
   sessionDate = 'Today',
+  activityTitle,
+  activityCategory,
+  classOptions,
   onReleaseTerminal
 }) => {
   const [attendeeName, setAttendeeName] = useState('')
   const [isNonMember, setIsNonMember] = useState(false)
   const [selectedUnit, setSelectedUnit] = useState('')
   const [contactPhone, setContactPhone] = useState('')
+  const [selectedClass, setSelectedClass] = useState('')
   const [selectedMemberId, setSelectedMemberId] = useState<string | null>(null)
 
   const [units, setUnits] = useState<StakeUnit[]>([])
@@ -53,6 +67,21 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
 
   const nameInputRef = useRef<HTMLInputElement>(null)
   const nextAttendeeButtonRef = useRef<HTMLButtonElement>(null)
+
+  const storedMeta = attendanceService.getStoredSessionMetadata()
+  const configuredClasses = useMemo(
+    () => normalizeClassOptions(classOptions ?? storedMeta?.classOptions),
+    [classOptions, storedMeta?.classOptions]
+  )
+  const isSkillAcquisition = useMemo(
+    () =>
+      isSkillAcquisitionActivity({
+        category: activityCategory ?? storedMeta?.activityCategory,
+        title: activityTitle ?? storedMeta?.activityTitle ?? sessionTitle,
+        classOptions: configuredClasses
+      }),
+    [activityCategory, activityTitle, sessionTitle, configuredClasses, storedMeta?.activityCategory, storedMeta?.activityTitle]
+  )
 
   // Focus management: focus name input initially or after confirmation reset
   useEffect(() => {
@@ -151,6 +180,7 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
     setSelectedMemberId(null)
     setContactPhone('')
     setSelectedUnit('')
+    setSelectedClass('')
     setIsNonMember(false)
     setStatusMessage(null)
     setFilteredMembers([])
@@ -168,6 +198,24 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
     if (!isNonMember && !selectedUnit) {
       setStatusMessage({ type: 'error', text: 'Please select your ward or branch.' })
       return
+    }
+
+    // Validate Skill Acquisition class selection when applicable
+    let resolvedSelectedClass: string | undefined = undefined
+    if (isSkillAcquisition) {
+      const classValidation = validateSkillAcquisitionCheckInClass({
+        isSkillAcquisition: true,
+        classOptions: configuredClasses,
+        selectedClass
+      })
+      if (!classValidation.valid) {
+        setStatusMessage({
+          type: 'error',
+          text: classValidation.error || 'Please select your Skill Acquisition class to check in.'
+        })
+        return
+      }
+      resolvedSelectedClass = classValidation.canonicalClass || selectedClass.trim()
     }
 
     // Retrieve active session ID from sessionStorage
@@ -192,7 +240,8 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
       memberId: selectedMemberId || undefined,
       isNonMember,
       unitId: selectedUnit || null,
-      contactPhone: contactPhone.trim() || undefined
+      contactPhone: contactPhone.trim() || undefined,
+      selectedClass: resolvedSelectedClass
     })
 
     setIsSubmitting(false)
@@ -207,6 +256,7 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
         firstName,
         isNonMember: res.record.isNonMember,
         unitName: selectedUnitObj ? selectedUnitObj.unitName : null,
+        selectedClass: res.record.selectedClass || resolvedSelectedClass || null,
         checkInTime: res.record.checkInTime
       })
       setStatusMessage(null)
@@ -287,6 +337,14 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
               <span className="font-medium">Activity</span>
               <span className="text-slate-800 font-medium truncate max-w-[220px]">{sessionTitle}</span>
             </div>
+            {confirmedAttendee.selectedClass && (
+              <div className="flex justify-between items-center text-slate-500">
+                <span className="font-medium">Skill Acquisition Class</span>
+                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-100 text-emerald-900 border border-emerald-300">
+                  {confirmedAttendee.selectedClass}
+                </span>
+              </div>
+            )}
           </div>
 
           <button
@@ -452,6 +510,40 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
               </select>
             </div>
           </div>
+
+          {/* Skill Acquisition Class Selector (Rendered ONLY for Skill Acquisition sessions) */}
+          {isSkillAcquisition && (
+            <div className="animate-terminal-enter">
+              <label
+                htmlFor="skill-class-select"
+                className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2"
+              >
+                Skill Acquisition Class (Required)
+              </label>
+              <div className="relative">
+                <BookOpen className="w-5 h-5 absolute left-3.5 top-3.5 text-emerald-600 pointer-events-none" />
+                <select
+                  id="skill-class-select"
+                  aria-label="Skill Acquisition Class"
+                  aria-required="true"
+                  value={selectedClass}
+                  onChange={(e) => setSelectedClass(e.target.value)}
+                  disabled={isSubmitting}
+                  className="w-full pl-11 pr-4 py-3.5 bg-slate-50/60 focus:bg-white border border-slate-300 focus:border-emerald-600 rounded-2xl text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 text-sm transition shadow-2xs"
+                >
+                  <option value="">-- Select your Skill Acquisition class --</option>
+                  {configuredClasses.map((cls) => (
+                    <option key={cls} value={cls}>
+                      {cls}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <p className="mt-1.5 text-[11px] text-slate-500">
+                Select the specific Skill Acquisition class you are attending at the Gathering Place today.
+              </p>
+            </div>
+          )}
 
           {/* Contact Phone (for Visitors) */}
           {isNonMember && (

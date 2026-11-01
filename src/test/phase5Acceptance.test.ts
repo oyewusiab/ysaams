@@ -86,7 +86,7 @@ describe('Phase 5 Acceptance: Role-Specific Navigation & Scoping', () => {
     expect(itemIds).not.toContain('audit-logs')
   })
 
-  it('4. Bishop navigation is restricted to assigned ward and excludes governance and audit logs', () => {
+  it('4. Bishop navigation is view-only, restricted to assigned ward, and excludes attendance, governance and audit logs', () => {
     const unitAssignments: UserUnitAssignment[] = [
       { id: 'ua-b', userId: 'u-bishop', unitId: 'unit-obantoko', assignedRole: 'bishop', createdAt: '2026-10-01' }
     ]
@@ -97,22 +97,24 @@ describe('Phase 5 Acceptance: Role-Specific Navigation & Scoping', () => {
     })
     const itemIds = items.map(i => i.id)
 
-    expect(access.canRecordManualAttendance).toBe(true)
-    expect(access.manageableUnitIds).toEqual(['unit-obantoko'])
+    expect(access.canRecordManualAttendance).toBe(false)
+    expect(access.canManageMembers).toBe(false)
+    expect(access.manageableUnitIds).toEqual([])
+    expect(access.reportUnitFilter).toEqual(['unit-obantoko'])
     expect(itemIds).toEqual([
       'dashboard',
       'activities',
-      'attendance',
       'members',
       'reports',
       'units',
       'settings'
     ])
+    expect(itemIds).not.toContain('attendance')
     expect(itemIds).not.toContain('users')
     expect(itemIds).not.toContain('audit-logs')
   })
 
-  it('5. Branch President navigation is restricted to assigned branch', () => {
+  it('5. Branch President navigation is view-only and restricted to assigned branch', () => {
     const unitAssignments: UserUnitAssignment[] = [
       { id: 'ua-bp', userId: 'u-bp', unitId: 'unit-alabata', assignedRole: 'branch_president', createdAt: '2026-10-01' }
     ]
@@ -123,8 +125,11 @@ describe('Phase 5 Acceptance: Role-Specific Navigation & Scoping', () => {
     })
     const itemIds = items.map(i => i.id)
 
-    expect(access.canRecordManualAttendance).toBe(true)
-    expect(access.manageableUnitIds).toEqual(['unit-alabata'])
+    expect(access.canRecordManualAttendance).toBe(false)
+    expect(access.canManageMembers).toBe(false)
+    expect(access.manageableUnitIds).toEqual([])
+    expect(access.reportUnitFilter).toEqual(['unit-alabata'])
+    expect(itemIds).not.toContain('attendance')
     expect(itemIds).not.toContain('users')
     expect(itemIds).not.toContain('audit-logs')
   })

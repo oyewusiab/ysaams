@@ -1,5 +1,6 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react'
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import {
+  ActivityDefinition,
   ActivitySession,
   StakeUnit,
   AttendanceRecord
@@ -11,6 +12,14 @@ import {
   copyAttendanceLink,
   getActiveSessionCode
 } from '../../lib/clipboardUtils'
+import {
+  isSkillAcquisitionActivity,
+  normalizeClassOptions
+} from '../../services/activityService'
+import {
+  exportToCsvAdvanced,
+  exportToXlsxAdvanced
+} from '../../lib/exportUtils'
 import { humanizeErrorMessage } from '../../lib/errorUtils'
 import { formatLagosTimestampDisplay } from '../../lib/timezone'
 import {
@@ -22,11 +31,16 @@ import {
   Clock,
   AlertCircle,
   CheckCircle2,
-  X
+  X,
+  BookOpen,
+  Download,
+  FileSpreadsheet,
+  Filter
 } from 'lucide-react'
 
 interface LiveActiveSessionViewProps {
   session: ActivitySession
+  activity?: ActivityDefinition | null
   units: StakeUnit[]
   activeCode?: string | null
   onClose?: () => void
@@ -37,12 +51,14 @@ interface RecentCheckInItem {
   attendeeName: string
   attendeeType: 'member' | 'visitor'
   unitName: string
+  selectedClass?: string | null
   checkInTime: string
   isManual: boolean
 }
 
 export const LiveActiveSessionView: React.FC<LiveActiveSessionViewProps> = ({
   session,
+  activity,
   units,
   activeCode: propCode,
   onClose
@@ -64,12 +80,28 @@ export const LiveActiveSessionView: React.FC<LiveActiveSessionViewProps> = ({
   const [memberRecords, setMemberRecords] = useState<AttendanceRecord[]>([])
   const [visitorRecords, setVisitorRecords] = useState<any[]>([])
   const [recentItems, setRecentItems] = useState<RecentCheckInItem[]>([])
+  const [selectedClassFilter, setSelectedClassFilter] = useState<string>('all')
   const [isLoading, setIsLoading] = useState(true)
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [statusState, setStatusState] = useState<'live' | 'refreshing' | 'stale'>('refreshing')
   const [lastUpdated, setLastUpdated] = useState<string>(new Date().toISOString())
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [feedbackToast, setFeedbackToast] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+
+  const configuredClasses = useMemo(
+    () => normalizeClassOptions(session.classOptions ?? activity?.classOptions),
+    [session.classOptions, activity?.classOptions]
+  )
+
+  const isSkillAcquisition = useMemo(
+    () =>
+      isSkillAcquisitionActivity({
+        category: session.activityCategory ?? activity?.category,
+        title: session.activityTitle ?? activity?.title ?? session.sessionTitle,
+        classOptions: configuredClasses
+      }),
+    [session.activityCategory, session.activityTitle, session.sessionTitle, activity?.category, activity?.title, configuredClasses]
+  )
 
   // Map units for quick lookup
   const unitMap = useRef(new Map<string, string>())
@@ -99,7 +131,7 @@ export const LiveActiveSessionView: React.FC<LiveActiveSessionViewProps> = ({
       // 1. Fetch Member Attendance Records for this session
       let attQuery = supabase
         .from('attendance_records')
-        .select('id, session_id, member_id, attendee_name, is_non_member, recorded_unit_id, check_in_time, is_manual, members(id, full_name, home_unit_id)')
+        .select('id, session_id, member_id, attendee_name, is_non_member, recorded_unit_id, selected_class, check_in_time, is_manual, members(id, full_name, home_unit_id)')
         .eq('session_id', session.id)
 
       if (authorizedUnitIds && authorizedUnitIds.length > 0) {
@@ -109,7 +141,7 @@ export const LiveActiveSessionView: React.FC<LiveActiveSessionViewProps> = ({
       // 2. Fetch Visitor Records for this session
       let visQuery = supabase
         .from('session_visitors')
-        .select('id, session_id, full_name, is_church_member, inviting_unit_id, created_at, recorded_by_terminal_id')
+        .select('id, session_id, full_name, is_church_member, inviting_unit_id, selected_class, created_at, recorded_by_terminal_id')
         .eq('session_id', session.id)
 
       if (authorizedUnitIds && authorizedUnitIds.length > 0) {
@@ -133,6 +165,7 @@ export const LiveActiveSessionView: React.FC<LiveActiveSessionViewProps> = ({
         isNonMember: false,
         unitId: r.recorded_unit_id,
         unitName: unitMap.current.get(r.recorded_unit_id) || 'Unit',
+        selectedClass: r.selected_class || null,
         checkInTime: r.check_in_time,
         isManual: !!r.is_manual
       }))
@@ -149,6 +182,7 @@ export const LiveActiveSessionView: React.FC<LiveActiveSessionViewProps> = ({
           attendeeName: m.attendeeName,
           attendeeType: 'member',
           unitName: m.unitName || 'Unit',
+          selectedClass: m.selectedClass || null,
           checkInTime: m.checkInTime,
           isManual: !!m.isManual
         })
@@ -160,13 +194,14 @@ export const LiveActiveSessionView: React.FC<LiveActiveSessionViewProps> = ({
           attendeeName: v.full_name || 'Visitor',
           attendeeType: 'visitor',
           unitName: (v.inviting_unit_id && unitMap.current.get(v.inviting_unit_id)) || 'Guest',
+          selectedClass: v.selected_class || null,
           checkInTime: v.created_at,
           isManual: false
         })
       }
 
       recentList.sort((a, b) => new Date(b.checkInTime).getTime() - new Date(a.checkInTime).getTime())
-      setRecentItems(recentList.slice(0, 20))
+      setRecentItems(recentList)
 
       setLastUpdated(new Date().toISOString())
       setStatusState('live')
@@ -244,16 +279,44 @@ export const LiveActiveSessionView: React.FC<LiveActiveSessionViewProps> = ({
     }
   }, [session.id, fetchAuthoritativeData])
 
+  // Filter member and visitor records by selectedClassFilter when active
+  const filteredMemberRecords = useMemo(() => {
+    if (selectedClassFilter === 'all') return memberRecords
+    if (selectedClassFilter === '__unassigned__') {
+      return memberRecords.filter((m) => !m.selectedClass || !m.selectedClass.trim())
+    }
+    const target = selectedClassFilter.toLowerCase()
+    return memberRecords.filter((m) => (m.selectedClass || '').trim().toLowerCase() === target)
+  }, [memberRecords, selectedClassFilter])
+
+  const filteredVisitorRecords = useMemo(() => {
+    if (selectedClassFilter === 'all') return visitorRecords
+    if (selectedClassFilter === '__unassigned__') {
+      return visitorRecords.filter((v) => !v.selected_class || !String(v.selected_class).trim())
+    }
+    const target = selectedClassFilter.toLowerCase()
+    return visitorRecords.filter((v) => String(v.selected_class || '').trim().toLowerCase() === target)
+  }, [visitorRecords, selectedClassFilter])
+
+  const filteredRecentItems = useMemo(() => {
+    if (selectedClassFilter === 'all') return recentItems.slice(0, 20)
+    if (selectedClassFilter === '__unassigned__') {
+      return recentItems.filter((r) => !r.selectedClass || !r.selectedClass.trim()).slice(0, 20)
+    }
+    const target = selectedClassFilter.toLowerCase()
+    return recentItems.filter((r) => (r.selectedClass || '').trim().toLowerCase() === target).slice(0, 20)
+  }, [recentItems, selectedClassFilter])
+
   // Aggregate Metrics (using stable database IDs)
-  const totalValidCheckIns = memberRecords.length + visitorRecords.length
+  const totalValidCheckIns = filteredMemberRecords.length + filteredVisitorRecords.length
 
   // Distinct attendees using stable identity (member_id for members, id for visitors)
-  const distinctMemberIds = new Set(memberRecords.map((m) => m.memberId || m.id))
-  const distinctVisitorIds = new Set(visitorRecords.map((v) => v.id))
+  const distinctMemberIds = new Set(filteredMemberRecords.map((m) => m.memberId || m.id))
+  const distinctVisitorIds = new Set(filteredVisitorRecords.map((v) => v.id))
   const distinctAttendeesCount = distinctMemberIds.size + distinctVisitorIds.size
 
-  const memberCount = memberRecords.length
-  const visitorCount = visitorRecords.length
+  const memberCount = filteredMemberRecords.length
+  const visitorCount = filteredVisitorRecords.length
 
   // Participating unit breakdown
   const unitBreakdown: { unitId: string; unitName: string; members: number; visitors: number; total: number }[] = []
@@ -267,8 +330,8 @@ export const LiveActiveSessionView: React.FC<LiveActiveSessionViewProps> = ({
       continue
     }
     const uName = unitMap.current.get(uid) || 'Unit'
-    const mCount = memberRecords.filter((m) => m.unitId === uid).length
-    const vCount = visitorRecords.filter((v) => v.inviting_unit_id === uid).length
+    const mCount = filteredMemberRecords.filter((m) => m.unitId === uid).length
+    const vCount = filteredVisitorRecords.filter((v) => v.inviting_unit_id === uid).length
     unitBreakdown.push({
       unitId: uid,
       unitName: uName,
@@ -276,6 +339,123 @@ export const LiveActiveSessionView: React.FC<LiveActiveSessionViewProps> = ({
       visitors: vCount,
       total: mCount + vCount
     })
+  }
+
+  // Skill Acquisition Class Breakdown (reconciles 100% with overall attendance)
+  const classBreakdown = useMemo(() => {
+    const map = new Map<string, { className: string; members: number; visitors: number; total: number; isConfigured: boolean }>()
+    for (const cls of configuredClasses) {
+      map.set(cls.toLowerCase(), {
+        className: cls,
+        members: 0,
+        visitors: 0,
+        total: 0,
+        isConfigured: true
+      })
+    }
+
+    let unassignedMembers = 0
+    let unassignedVisitors = 0
+
+    for (const m of memberRecords) {
+      const raw = m.selectedClass ? m.selectedClass.trim() : ''
+      if (!raw) {
+        unassignedMembers++
+        continue
+      }
+      const key = raw.toLowerCase()
+      const existing = map.get(key) || {
+        className: raw,
+        members: 0,
+        visitors: 0,
+        total: 0,
+        isConfigured: false
+      }
+      existing.members++
+      existing.total++
+      map.set(key, existing)
+    }
+
+    for (const v of visitorRecords) {
+      const raw = v.selected_class ? String(v.selected_class).trim() : ''
+      if (!raw) {
+        unassignedVisitors++
+        continue
+      }
+      const key = raw.toLowerCase()
+      const existing = map.get(key) || {
+        className: raw,
+        members: 0,
+        visitors: 0,
+        total: 0,
+        isConfigured: false
+      }
+      existing.visitors++
+      existing.total++
+      map.set(key, existing)
+    }
+
+    const list = Array.from(map.values())
+    if (unassignedMembers + unassignedVisitors > 0 && (isSkillAcquisition || list.length > 0)) {
+      list.push({
+        className: 'Unassigned / Not Specified',
+        members: unassignedMembers,
+        visitors: unassignedVisitors,
+        total: unassignedMembers + unassignedVisitors,
+        isConfigured: false
+      })
+    }
+    return list
+  }, [configuredClasses, memberRecords, visitorRecords, isSkillAcquisition])
+
+  const hasAnyClassData = isSkillAcquisition || classBreakdown.some((c) => c.total > 0)
+
+  // Export Live Session Records (respecting active class filter)
+  const handleExportLiveSession = async (format: 'csv' | 'xlsx') => {
+    const exportRows = [
+      ...filteredMemberRecords.map((m) => ({
+        attendeeName: m.attendeeName,
+        attendeeType: 'Member',
+        unitName: m.unitName || 'Unit',
+        selectedClass: m.selectedClass || 'N/A',
+        checkInTime: formatLagosTimestampDisplay(m.checkInTime),
+        source: m.isManual ? 'Manual' : 'Terminal'
+      })),
+      ...filteredVisitorRecords.map((v) => ({
+        attendeeName: v.full_name || 'Visitor',
+        attendeeType: 'Visitor',
+        unitName: (v.inviting_unit_id && unitMap.current.get(v.inviting_unit_id)) || 'Guest',
+        selectedClass: v.selected_class || 'N/A',
+        checkInTime: formatLagosTimestampDisplay(v.created_at),
+        source: 'Terminal'
+      }))
+    ]
+
+    const metadata = {
+      title: `${session.sessionTitle}${selectedClassFilter !== 'all' ? ` — Class: ${selectedClassFilter}` : ''}`,
+      subtitle: 'Abeokuta Nigeria Obantoko Stake — Live Session Attendance Register',
+      generatedAt: formatLagosTimestampDisplay(new Date().toISOString()),
+      periodLabel: session.sessionDate,
+      scopeLabel: selectedClassFilter === 'all' ? 'All Classes' : `Class: ${selectedClassFilter}`,
+      totalRecords: exportRows.length,
+      uniqueAttendees: distinctAttendeesCount
+    }
+
+    const cols = [
+      { key: 'attendeeName', label: 'Attendee Name' },
+      { key: 'attendeeType', label: 'Classification' },
+      { key: 'unitName', label: 'Unit' },
+      { key: 'selectedClass', label: 'Skill Acquisition Class' },
+      { key: 'checkInTime', label: 'Check-In Time (Lagos)' },
+      { key: 'source', label: 'Entry Source' }
+    ]
+
+    const baseName = `live_session_${session.sessionDate}${selectedClassFilter !== 'all' ? `_${selectedClassFilter.replace(/\s+/g, '_').toLowerCase()}` : ''}`
+    if (format === 'csv') {
+      exportToCsvAdvanced(baseName, metadata, cols, exportRows)
+    } else {
+      await exportToXlsxAdvanced(baseName, metadata, cols, exportRows)
+    }
   }
 
   // Handle Copy Code
@@ -340,6 +520,12 @@ export const LiveActiveSessionView: React.FC<LiveActiveSessionViewProps> = ({
               <span>Active Session Monitor</span>
             </span>
             <span className="text-xs text-slate-500 dark:text-slate-400">• {session.sessionDate}</span>
+            {isSkillAcquisition && (
+              <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-100 dark:bg-amber-950/80 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-700/60">
+                <BookOpen className="w-3 h-3" />
+                <span>Multi-Class Skill Acquisition</span>
+              </span>
+            )}
           </div>
           <h2 className="text-lg font-bold text-slate-900 dark:text-white">{session.sessionTitle}</h2>
         </div>
@@ -369,6 +555,28 @@ export const LiveActiveSessionView: React.FC<LiveActiveSessionViewProps> = ({
               Updated {formatLagosTimestampDisplay(lastUpdated)}
             </span>
           </div>
+
+          {/* Class-level / Session Export Buttons */}
+          <button
+            type="button"
+            onClick={() => handleExportLiveSession('csv')}
+            disabled={totalValidCheckIns === 0}
+            className="inline-flex items-center space-x-1 px-2.5 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 disabled:opacity-40 text-xs font-semibold text-slate-700 dark:text-slate-200 transition"
+            title="Export live attendance to CSV"
+          >
+            <Download className="w-3.5 h-3.5" />
+            <span>CSV</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => handleExportLiveSession('xlsx')}
+            disabled={totalValidCheckIns === 0}
+            className="inline-flex items-center space-x-1 px-2.5 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 disabled:opacity-40 text-xs font-semibold text-slate-700 dark:text-slate-200 transition"
+            title="Export live attendance to Excel"
+          >
+            <FileSpreadsheet className="w-3.5 h-3.5" />
+            <span>Excel</span>
+          </button>
 
           {/* Refresh Button */}
           <button
@@ -412,7 +620,7 @@ export const LiveActiveSessionView: React.FC<LiveActiveSessionViewProps> = ({
           </div>
           <div>
             <span className="text-[10px] text-slate-500 dark:text-slate-400 uppercase tracking-wider font-semibold block">
-              Active Check-In Code
+              Active Check-In Code {isSkillAcquisition ? '(Shared Across All Skill Classes)' : ''}
             </span>
             {currentCode ? (
               <span className="font-mono text-xl font-extrabold text-emerald-700 dark:text-emerald-400 tracking-wider">
@@ -457,7 +665,9 @@ export const LiveActiveSessionView: React.FC<LiveActiveSessionViewProps> = ({
           <div className="text-2xl font-extrabold text-slate-900 dark:text-white mt-1">
             {isLoading ? '...' : totalValidCheckIns}
           </div>
-          <span className="text-[10px] text-slate-500 dark:text-slate-400">Authoritative records</span>
+          <span className="text-[10px] text-slate-500 dark:text-slate-400">
+            {selectedClassFilter === 'all' ? 'Authoritative records' : `Filtered: ${selectedClassFilter}`}
+          </span>
         </div>
 
         <div className="p-4 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl">
@@ -484,6 +694,95 @@ export const LiveActiveSessionView: React.FC<LiveActiveSessionViewProps> = ({
           <span className="text-[10px] text-slate-500 dark:text-slate-400">Invited guests</span>
         </div>
       </div>
+
+      {/* Live Attendance by Skill Acquisition Class (Requirements E & F) */}
+      {hasAnyClassData && (
+        <div className="space-y-3">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div className="flex items-center space-x-2">
+              <BookOpen className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+              <h3 className="text-xs font-bold text-slate-900 dark:text-white uppercase tracking-wider">
+                Attendance by Skill Acquisition Class
+              </h3>
+            </div>
+            <div className="flex items-center space-x-2">
+              <Filter className="w-3.5 h-3.5 text-slate-400" />
+              <label htmlFor="live-class-filter" className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
+                Filter Class:
+              </label>
+              <select
+                id="live-class-filter"
+                aria-label="Filter by Skill Acquisition Class"
+                value={selectedClassFilter}
+                onChange={(e) => setSelectedClassFilter(e.target.value)}
+                className="px-2.5 py-1 bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-xs text-slate-800 dark:text-slate-200"
+              >
+                <option value="all">All Classes ({memberRecords.length + visitorRecords.length})</option>
+                {classBreakdown.map((c) => {
+                  const val = c.className === 'Unassigned / Not Specified' ? '__unassigned__' : c.className
+                  return (
+                    <option key={c.className} value={val}>
+                      {c.className} ({c.total})
+                    </option>
+                  )
+                })}
+              </select>
+            </div>
+          </div>
+
+          <div className="bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
+            <table className="w-full text-xs text-left">
+              <thead className="bg-slate-100 dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 uppercase text-[10px] text-slate-600 dark:text-slate-400">
+                <tr>
+                  <th className="px-4 py-2.5">Skill Acquisition Class</th>
+                  <th className="px-4 py-2.5 text-center">Members</th>
+                  <th className="px-4 py-2.5 text-center">Visitors</th>
+                  <th className="px-4 py-2.5 text-right font-bold">Total</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
+                {classBreakdown.map((cls) => {
+                  const filterVal = cls.className === 'Unassigned / Not Specified' ? '__unassigned__' : cls.className
+                  const isSelected = selectedClassFilter === filterVal
+                  return (
+                    <tr
+                      key={cls.className}
+                      onClick={() => setSelectedClassFilter(isSelected ? 'all' : filterVal)}
+                      className={`cursor-pointer transition ${
+                        isSelected
+                          ? 'bg-emerald-50/80 dark:bg-emerald-950/40'
+                          : 'hover:bg-slate-100/50 dark:hover:bg-slate-900/50'
+                      }`}
+                    >
+                      <td className="px-4 py-2.5 font-medium text-slate-900 dark:text-slate-200">
+                        <span>{cls.className}</span>
+                        {!cls.isConfigured && cls.className !== 'Unassigned / Not Specified' && (
+                          <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300">
+                            Historical
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-4 py-2.5 text-center text-slate-700 dark:text-slate-300">{cls.members}</td>
+                      <td className="px-4 py-2.5 text-center text-slate-700 dark:text-slate-300">{cls.visitors}</td>
+                      <td className="px-4 py-2.5 text-right font-bold text-emerald-700 dark:text-emerald-400">{cls.total}</td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+              <tfoot className="bg-slate-100/80 dark:bg-slate-900/80 border-t border-slate-200 dark:border-slate-800 font-bold text-slate-900 dark:text-white">
+                <tr>
+                  <td className="px-4 py-2">Reconciled Session Total</td>
+                  <td className="px-4 py-2 text-center">{memberRecords.length}</td>
+                  <td className="px-4 py-2 text-center">{visitorRecords.length}</td>
+                  <td className="px-4 py-2 text-right text-emerald-700 dark:text-emerald-400">
+                    {memberRecords.length + visitorRecords.length}
+                  </td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </div>
+      )}
 
       {/* Participating Units Breakdown & Live Check-in Stream */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -533,26 +832,26 @@ export const LiveActiveSessionView: React.FC<LiveActiveSessionViewProps> = ({
             <div className="flex items-center space-x-2">
               <Clock className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
               <h3 className="text-xs font-bold text-slate-900 dark:text-white uppercase tracking-wider">
-                Recent Check-Ins ({recentItems.length})
+                Recent Check-Ins ({filteredRecentItems.length})
               </h3>
             </div>
             <span className="text-[10px] text-slate-500 dark:text-slate-400">Realtime stream</span>
           </div>
 
           <div className="bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden max-h-[300px] overflow-y-auto">
-            {recentItems.length === 0 ? (
+            {filteredRecentItems.length === 0 ? (
               <div className="p-8 text-center text-slate-500 italic text-xs">
                 {isLoading ? 'Loading check-ins...' : 'No attendees checked in yet for this session.'}
               </div>
             ) : (
               <div className="divide-y divide-slate-200 dark:divide-slate-800">
-                {recentItems.map((item) => (
+                {filteredRecentItems.map((item) => (
                   <div
                     key={item.id}
                     className="px-4 py-2.5 flex items-center justify-between hover:bg-slate-100/60 dark:hover:bg-slate-900/50 text-xs"
                   >
                     <div className="min-w-0 pr-2">
-                      <div className="flex items-center space-x-2">
+                      <div className="flex items-center flex-wrap gap-1.5">
                         <span className="font-semibold text-slate-900 dark:text-white truncate">
                           {item.attendeeName}
                         </span>
@@ -565,6 +864,11 @@ export const LiveActiveSessionView: React.FC<LiveActiveSessionViewProps> = ({
                         >
                           {item.attendeeType}
                         </span>
+                        {item.selectedClass && (
+                          <span className="text-[9px] px-1.5 py-0.2 rounded font-semibold bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800">
+                            {item.selectedClass}
+                          </span>
+                        )}
                         {item.isManual && (
                           <span className="text-[9px] text-amber-700 dark:text-amber-400 font-mono">
                             Manual

@@ -8,7 +8,8 @@ import {
   Award,
   Calendar,
   Building2,
-  Sparkles
+  Sparkles,
+  BookOpen
 } from 'lucide-react'
 import { ChartDataset, ReportSummaryMetrics } from '../../services/reportService'
 
@@ -18,6 +19,7 @@ interface VisualAnalyticsViewProps {
   insights: string[]
   onSelectUnit?: (unitId: string) => void
   onSelectActivity?: (activityId: string) => void
+  onSelectClass?: (className: string) => void
 }
 
 export const VisualAnalyticsView: React.FC<VisualAnalyticsViewProps> = ({
@@ -25,13 +27,18 @@ export const VisualAnalyticsView: React.FC<VisualAnalyticsViewProps> = ({
   metrics,
   insights,
   onSelectUnit,
-  onSelectActivity
+  onSelectActivity,
+  onSelectClass
 }) => {
   const [viewMode, setViewMode] = useState<'charts' | 'table'>('charts')
 
   const maxTimelineCount = Math.max(1, ...charts.trendTimeline.map(t => t.recordsCount))
   const maxUnitCount = Math.max(1, ...charts.unitBreakdown.map(u => u.recordsCount))
   const maxActivityCount = Math.max(1, ...charts.activityBreakdown.map(a => a.recordsCount))
+  const activeClassBreakdown = (charts.classBreakdown || []).filter(
+    c => c.recordsCount > 0 || c.isConfigured
+  )
+  const maxClassCount = Math.max(1, ...activeClassBreakdown.map(c => c.recordsCount))
 
   return (
     <div className="space-y-6">
@@ -180,170 +187,226 @@ export const VisualAnalyticsView: React.FC<VisualAnalyticsViewProps> = ({
       </div>
 
       {viewMode === 'charts' ? (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Chart 1: Attendance Timeline / Trend */}
-          <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 flex flex-col justify-between">
-            <div className="mb-4">
-              <h5 className="text-xs font-bold text-white flex items-center space-x-2">
-                <Calendar className="w-3.5 h-3.5 text-teal-400" />
-                <span>Attendance Timeline & Trend</span>
-              </h5>
-              <p className="text-[11px] text-slate-400">Total check-ins by activity date</p>
-            </div>
+        <div className="space-y-6">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* Chart 1: Attendance Timeline / Trend */}
+            <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 flex flex-col justify-between">
+              <div className="mb-4">
+                <h5 className="text-xs font-bold text-white flex items-center space-x-2">
+                  <Calendar className="w-3.5 h-3.5 text-teal-400" />
+                  <span>Attendance Timeline & Trend</span>
+                </h5>
+                <p className="text-[11px] text-slate-400">Total check-ins by activity date</p>
+              </div>
 
-            {charts.trendTimeline.length > 0 ? (
-              <div className="space-y-2.5">
-                {charts.trendTimeline.map((item, idx) => {
-                  return (
-                    <div key={idx} className="space-y-1">
-                      <div className="flex justify-between text-[11px]">
-                        <span className="text-slate-300 font-medium">{item.periodLabel}</span>
-                        <div className="space-x-2 text-slate-400 font-mono">
-                          <span className="text-indigo-400">{item.membersCount} mem</span>
-                          <span className="text-teal-400">{item.visitorsCount} vis</span>
-                          <span className="font-bold text-white">({item.recordsCount})</span>
+              {charts.trendTimeline.length > 0 ? (
+                <div className="space-y-2.5">
+                  {charts.trendTimeline.map((item, idx) => {
+                    return (
+                      <div key={idx} className="space-y-1">
+                        <div className="flex justify-between text-[11px]">
+                          <span className="text-slate-300 font-medium">{item.periodLabel}</span>
+                          <div className="space-x-2 text-slate-400 font-mono">
+                            <span className="text-indigo-400">{item.membersCount} mem</span>
+                            <span className="text-teal-400">{item.visitorsCount} vis</span>
+                            <span className="font-bold text-white">({item.recordsCount})</span>
+                          </div>
+                        </div>
+                        <div className="w-full bg-slate-900 rounded-full h-3 overflow-hidden flex">
+                          <div
+                            className="bg-indigo-500 h-full transition-all duration-300"
+                            style={{ width: `${(item.membersCount / maxTimelineCount) * 100}%` }}
+                            title={`Members: ${item.membersCount}`}
+                          />
+                          <div
+                            className="bg-teal-400 h-full transition-all duration-300"
+                            style={{ width: `${(item.visitorsCount / maxTimelineCount) * 100}%` }}
+                            title={`Visitors: ${item.visitorsCount}`}
+                          />
                         </div>
                       </div>
-                      <div className="w-full bg-slate-900 rounded-full h-3 overflow-hidden flex">
-                        <div
-                          className="bg-indigo-500 h-full transition-all duration-300"
-                          style={{ width: `${(item.membersCount / maxTimelineCount) * 100}%` }}
-                          title={`Members: ${item.membersCount}`}
-                        />
-                        <div
-                          className="bg-teal-400 h-full transition-all duration-300"
-                          style={{ width: `${(item.visitorsCount / maxTimelineCount) * 100}%` }}
-                          title={`Visitors: ${item.visitorsCount}`}
-                        />
-                      </div>
-                    </div>
-                  )
-                })}
+                    )
+                  })}
+                </div>
+              ) : (
+                <div className="py-8 text-center text-xs text-slate-500">No attendance timeline data in scope.</div>
+              )}
+            </div>
+
+            {/* Chart 2: Stake Unit Breakdown & Comparison */}
+            <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 flex flex-col justify-between">
+              <div className="mb-4">
+                <h5 className="text-xs font-bold text-white flex items-center space-x-2">
+                  <Building2 className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Attendance by Stake Unit</span>
+                </h5>
+                <p className="text-[11px] text-slate-400">Historical unit attribution at attendance time</p>
               </div>
-            ) : (
-              <div className="py-8 text-center text-xs text-slate-500">No attendance timeline data in scope.</div>
-            )}
+
+              {charts.unitBreakdown.length > 0 ? (
+                <div className="space-y-2.5">
+                  {charts.unitBreakdown.map((item, idx) => {
+                    const widthPct = Math.round((item.recordsCount / maxUnitCount) * 100)
+                    return (
+                      <div
+                        key={idx}
+                        onClick={() => onSelectUnit && onSelectUnit(item.unitId)}
+                        className={`space-y-1 ${onSelectUnit ? 'cursor-pointer hover:opacity-80' : ''}`}
+                      >
+                        <div className="flex justify-between text-[11px]">
+                          <span className="text-slate-300 font-medium">{item.unitName}</span>
+                          <div className="space-x-1 font-mono">
+                            <span className="text-emerald-400 font-bold">{item.recordsCount}</span>
+                            <span className="text-slate-500">({item.percentage}%)</span>
+                          </div>
+                        </div>
+                        <div className="w-full bg-slate-900 rounded-full h-2.5 overflow-hidden">
+                          <div
+                            className="bg-emerald-500 h-full rounded-full transition-all duration-300"
+                            style={{ width: `${Math.max(2, widthPct)}%` }}
+                          />
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              ) : (
+                <div className="py-8 text-center text-xs text-slate-500">No unit breakdown data in scope.</div>
+              )}
+            </div>
+
+            {/* Chart 3: Top Activities Breakdown */}
+            <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 flex flex-col justify-between">
+              <div className="mb-4">
+                <h5 className="text-xs font-bold text-white flex items-center space-x-2">
+                  <Award className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Attendance by Activity</span>
+                </h5>
+                <p className="text-[11px] text-slate-400">Check-ins across activity definitions</p>
+              </div>
+
+              {charts.activityBreakdown.length > 0 ? (
+                <div className="space-y-2.5">
+                  {charts.activityBreakdown.map((item, idx) => {
+                    const widthPct = Math.round((item.recordsCount / maxActivityCount) * 100)
+                    return (
+                      <div
+                        key={idx}
+                        onClick={() => onSelectActivity && onSelectActivity(item.activityId)}
+                        className={`space-y-1 ${onSelectActivity ? 'cursor-pointer hover:opacity-80' : ''}`}
+                      >
+                        <div className="flex justify-between text-[11px]">
+                          <span className="text-slate-300 font-medium truncate max-w-[200px]">{item.activityTitle}</span>
+                          <span className="text-amber-400 font-bold font-mono">{item.recordsCount}</span>
+                        </div>
+                        <div className="w-full bg-slate-900 rounded-full h-2.5 overflow-hidden">
+                          <div
+                            className="bg-amber-500 h-full rounded-full transition-all duration-300"
+                            style={{ width: `${Math.max(2, widthPct)}%` }}
+                          />
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              ) : (
+                <div className="py-8 text-center text-xs text-slate-500">No activity breakdown data in scope.</div>
+              )}
+            </div>
+
+            {/* Chart 4: Member vs Visitor Composition */}
+            <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 flex flex-col justify-between">
+              <div className="mb-4">
+                <h5 className="text-xs font-bold text-white flex items-center space-x-2">
+                  <Users className="w-3.5 h-3.5 text-indigo-400" />
+                  <span>Member vs Visitor Composition</span>
+                </h5>
+                <p className="text-[11px] text-slate-400">Total cohort distribution</p>
+              </div>
+
+              <div className="space-y-4 py-2">
+                <div className="flex items-center justify-between p-3 rounded-lg bg-slate-900/60 border border-slate-800">
+                  <div className="flex items-center space-x-3">
+                    <div className="w-3 h-3 rounded-full bg-indigo-500" />
+                    <div>
+                      <div className="text-xs font-semibold text-white">Church Members</div>
+                      <div className="text-[11px] text-slate-400">{charts.typeBreakdown.members} recorded check-ins</div>
+                    </div>
+                  </div>
+                  <div className="text-sm font-bold text-indigo-400 font-mono">
+                    {charts.typeBreakdown.memberPct}%
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between p-3 rounded-lg bg-slate-900/60 border border-slate-800">
+                  <div className="flex items-center space-x-3">
+                    <div className="w-3 h-3 rounded-full bg-teal-400" />
+                    <div>
+                      <div className="text-xs font-semibold text-white">Visitors & Friends</div>
+                      <div className="text-[11px] text-slate-400">{charts.typeBreakdown.visitors} recorded check-ins</div>
+                    </div>
+                  </div>
+                  <div className="text-sm font-bold text-teal-400 font-mono">
+                    {charts.typeBreakdown.visitorPct}%
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
 
-          {/* Chart 2: Stake Unit Breakdown & Comparison */}
-          <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 flex flex-col justify-between">
-            <div className="mb-4">
-              <h5 className="text-xs font-bold text-white flex items-center space-x-2">
-                <Building2 className="w-3.5 h-3.5 text-emerald-400" />
-                <span>Attendance by Stake Unit</span>
-              </h5>
-              <p className="text-[11px] text-slate-400">Historical unit attribution at attendance time</p>
-            </div>
+          {/* Chart 5: Skill Acquisition Class Breakdown (when Skill Acquisition classes are present) */}
+          {activeClassBreakdown.length > 0 && (
+            <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h5 className="text-xs font-bold text-white flex items-center space-x-2">
+                    <BookOpen className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>Skill Acquisition Attendance by Class</span>
+                  </h5>
+                  <p className="text-[11px] text-slate-400">
+                    Reconciled attendance across concurrent Skill Acquisition classes
+                  </p>
+                </div>
+                {onSelectClass && (
+                  <span className="text-[10px] text-slate-400">Click class to filter register</span>
+                )}
+              </div>
 
-            {charts.unitBreakdown.length > 0 ? (
-              <div className="space-y-2.5">
-                {charts.unitBreakdown.map((item, idx) => {
-                  const widthPct = Math.round((item.recordsCount / maxUnitCount) * 100)
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                {activeClassBreakdown.map((cls) => {
+                  const widthPct = Math.round((cls.recordsCount / maxClassCount) * 100)
+                  const filterKey =
+                    cls.className === 'Not Applicable / Unassigned' ? '__unassigned__' : cls.className
                   return (
                     <div
-                      key={idx}
-                      onClick={() => onSelectUnit && onSelectUnit(item.unitId)}
-                      className={`space-y-1 ${onSelectUnit ? 'cursor-pointer hover:opacity-80' : ''}`}
+                      key={cls.className}
+                      onClick={() => onSelectClass && onSelectClass(filterKey)}
+                      className={`p-3 rounded-xl bg-slate-900/70 border border-slate-800 space-y-1.5 ${
+                        onSelectClass ? 'cursor-pointer hover:border-emerald-700/60 transition' : ''
+                      }`}
                     >
-                      <div className="flex justify-between text-[11px]">
-                        <span className="text-slate-300 font-medium">{item.unitName}</span>
-                        <div className="space-x-1 font-mono">
-                          <span className="text-emerald-400 font-bold">{item.recordsCount}</span>
-                          <span className="text-slate-500">({item.percentage}%)</span>
-                        </div>
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="font-bold text-slate-200">{cls.className}</span>
+                        <span className="font-mono font-bold text-emerald-400">
+                          {cls.recordsCount} ({cls.percentage}%)
+                        </span>
                       </div>
-                      <div className="w-full bg-slate-900 rounded-full h-2.5 overflow-hidden">
+                      <div className="w-full h-2 bg-slate-950 rounded-full overflow-hidden">
                         <div
                           className="bg-emerald-500 h-full rounded-full transition-all duration-300"
-                          style={{ width: `${Math.max(2, widthPct)}%` }}
+                          style={{ width: `${cls.recordsCount > 0 ? Math.max(4, widthPct) : 0}%` }}
                         />
+                      </div>
+                      <div className="flex items-center justify-between text-[10px] text-slate-400">
+                        <span>{cls.membersCount} Member{cls.membersCount === 1 ? '' : 's'}</span>
+                        <span>{cls.visitorsCount} Visitor{cls.visitorsCount === 1 ? '' : 's'}</span>
                       </div>
                     </div>
                   )
                 })}
               </div>
-            ) : (
-              <div className="py-8 text-center text-xs text-slate-500">No unit breakdown data in scope.</div>
-            )}
-          </div>
-
-          {/* Chart 3: Top Activities Breakdown */}
-          <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 flex flex-col justify-between">
-            <div className="mb-4">
-              <h5 className="text-xs font-bold text-white flex items-center space-x-2">
-                <Award className="w-3.5 h-3.5 text-amber-400" />
-                <span>Attendance by Activity</span>
-              </h5>
-              <p className="text-[11px] text-slate-400">Check-ins across activity definitions</p>
             </div>
-
-            {charts.activityBreakdown.length > 0 ? (
-              <div className="space-y-2.5">
-                {charts.activityBreakdown.map((item, idx) => {
-                  const widthPct = Math.round((item.recordsCount / maxActivityCount) * 100)
-                  return (
-                    <div
-                      key={idx}
-                      onClick={() => onSelectActivity && onSelectActivity(item.activityId)}
-                      className={`space-y-1 ${onSelectActivity ? 'cursor-pointer hover:opacity-80' : ''}`}
-                    >
-                      <div className="flex justify-between text-[11px]">
-                        <span className="text-slate-300 font-medium truncate max-w-[200px]">{item.activityTitle}</span>
-                        <span className="text-amber-400 font-bold font-mono">{item.recordsCount}</span>
-                      </div>
-                      <div className="w-full bg-slate-900 rounded-full h-2.5 overflow-hidden">
-                        <div
-                          className="bg-amber-500 h-full rounded-full transition-all duration-300"
-                          style={{ width: `${Math.max(2, widthPct)}%` }}
-                        />
-                      </div>
-                    </div>
-                  )
-                })}
-              </div>
-            ) : (
-              <div className="py-8 text-center text-xs text-slate-500">No activity breakdown data in scope.</div>
-            )}
-          </div>
-
-          {/* Chart 4: Member vs Visitor Composition */}
-          <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 flex flex-col justify-between">
-            <div className="mb-4">
-              <h5 className="text-xs font-bold text-white flex items-center space-x-2">
-                <Users className="w-3.5 h-3.5 text-indigo-400" />
-                <span>Member vs Visitor Composition</span>
-              </h5>
-              <p className="text-[11px] text-slate-400">Total cohort distribution</p>
-            </div>
-
-            <div className="space-y-4 py-2">
-              <div className="flex items-center justify-between p-3 rounded-lg bg-slate-900/60 border border-slate-800">
-                <div className="flex items-center space-x-3">
-                  <div className="w-3 h-3 rounded-full bg-indigo-500" />
-                  <div>
-                    <div className="text-xs font-semibold text-white">Church Members</div>
-                    <div className="text-[11px] text-slate-400">{charts.typeBreakdown.members} recorded check-ins</div>
-                  </div>
-                </div>
-                <div className="text-sm font-bold text-indigo-400 font-mono">
-                  {charts.typeBreakdown.memberPct}%
-                </div>
-              </div>
-
-              <div className="flex items-center justify-between p-3 rounded-lg bg-slate-900/60 border border-slate-800">
-                <div className="flex items-center space-x-3">
-                  <div className="w-3 h-3 rounded-full bg-teal-400" />
-                  <div>
-                    <div className="text-xs font-semibold text-white">Visitors & Friends</div>
-                    <div className="text-[11px] text-slate-400">{charts.typeBreakdown.visitors} recorded check-ins</div>
-                  </div>
-                </div>
-                <div className="text-sm font-bold text-teal-400 font-mono">
-                  {charts.typeBreakdown.visitorPct}%
-                </div>
-              </div>
-            </div>
-          </div>
+          )}
         </div>
       ) : (
         /* Accessible Data Tables Alternative */
@@ -405,6 +468,37 @@ export const VisualAnalyticsView: React.FC<VisualAnalyticsViewProps> = ({
               </tbody>
             </table>
           </div>
+
+          {/* Skill Acquisition Class Comparison Table */}
+          {activeClassBreakdown.length > 0 && (
+            <div className="lg:col-span-2 bg-slate-950 border border-slate-800 rounded-xl overflow-hidden">
+              <div className="px-4 py-3 bg-slate-900 border-b border-slate-800 text-xs font-bold text-white">
+                Skill Acquisition Class Comparison Table
+              </div>
+              <table className="w-full text-xs text-left text-slate-300">
+                <thead className="bg-slate-900/50 uppercase text-[10px] text-slate-400 border-b border-slate-800">
+                  <tr>
+                    <th className="px-4 py-2.5">Skill Acquisition Class</th>
+                    <th className="px-4 py-2.5 text-right">Members</th>
+                    <th className="px-4 py-2.5 text-right">Visitors</th>
+                    <th className="px-4 py-2.5 text-right">Total Attendance</th>
+                    <th className="px-4 py-2.5 text-right">Share (%)</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {activeClassBreakdown.map((cls, i) => (
+                    <tr key={i} className="border-b border-slate-900 hover:bg-slate-900/50">
+                      <td className="px-4 py-2.5 font-medium text-white">{cls.className}</td>
+                      <td className="px-4 py-2.5 text-right font-mono">{cls.membersCount}</td>
+                      <td className="px-4 py-2.5 text-right font-mono">{cls.visitorsCount}</td>
+                      <td className="px-4 py-2.5 text-right font-mono font-bold text-white">{cls.recordsCount}</td>
+                      <td className="px-4 py-2.5 text-right font-mono text-emerald-400">{cls.percentage}%</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       )}
     </div>

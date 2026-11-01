@@ -5,6 +5,157 @@ export { STANDARD_ACTIVITY_CATEGORIES }
 export type { StandardActivityCategory }
 
 /**
+ * Suggested default Skill Acquisition classes for convenience in the UI.
+ * These are examples only and are never hardcoded as a permanent restriction;
+ * authorized leaders may add, edit, or remove any class.
+ */
+export const DEFAULT_SKILL_ACQUISITION_CLASSES = [
+  'Barbing',
+  'Tailoring',
+  'Shoe Making',
+  'Catering',
+  'ICT'
+] as const
+
+/**
+ * Trims, filters empty values, and deduplicates class options case-insensitively
+ * while preserving the first seen display casing.
+ */
+export function normalizeClassOptions(
+  classes?: string[] | string | null
+): string[] {
+  if (!classes) return []
+  const rawList = Array.isArray(classes)
+    ? classes
+    : classes.split(',')
+
+  const seen = new Set<string>()
+  const result: string[] = []
+  for (const item of rawList) {
+    const trimmed = (item || '').trim().replace(/\s+/g, ' ')
+    if (!trimmed) continue
+    const key = trimmed.toLowerCase()
+    if (!seen.has(key)) {
+      seen.add(key)
+      result.push(trimmed)
+    }
+  }
+  return result
+}
+
+/**
+ * Parses a category string and optional explicit class list.
+ * Supports convenient CSV/input syntax such as:
+ *   "Skill Acquisition: Barbing, Tailoring, Shoe Making, Catering, ICT"
+ * while NEVER interpreting commas in unrelated activity categories as class options.
+ */
+export function parseSkillAcquisitionCategoryAndClasses(
+  rawCategory: string,
+  explicitClasses?: string[] | string | null
+): { category: string; classOptions: string[]; hadColonSyntax: boolean } {
+  const trimmedCategory = (rawCategory || '').trim()
+  const prefixMatch = trimmedCategory.match(/^skill\s+acquisition\s*:\s*(.*)$/i)
+
+  let category = trimmedCategory
+  let parsedFromCategory: string[] = []
+  let hadColonSyntax = false
+
+  if (prefixMatch) {
+    hadColonSyntax = true
+    category = 'Skill Acquisition'
+    parsedFromCategory = normalizeClassOptions(prefixMatch[1])
+  }
+
+  const parsedExplicit = normalizeClassOptions(explicitClasses)
+  const merged = normalizeClassOptions([...parsedFromCategory, ...parsedExplicit])
+
+  return {
+    category,
+    classOptions: merged,
+    hadColonSyntax
+  }
+}
+
+/**
+ * Determines whether an activity or session is a Skill Acquisition / multi-class session.
+ */
+export function isSkillAcquisitionActivity(input: {
+  category?: string | null
+  title?: string | null
+  classOptions?: string[] | null
+}): boolean {
+  const cat = (input.category || '').trim().toLowerCase()
+  const title = (input.title || '').trim().toLowerCase()
+  const hasClasses =
+    Array.isArray(input.classOptions) &&
+    input.classOptions.some((c) => Boolean(c && c.trim()))
+
+  return (
+    cat === 'skill acquisition' ||
+    title === 'skill acquisition' ||
+    hasClasses
+  )
+}
+
+/**
+ * Validates a participant's selected class against the activity/session configuration.
+ * - For Skill Acquisition activities: requires a non-empty class belonging to configured classes.
+ * - For non-Skill Acquisition activities: does not require class selection and rejects unexpected classes.
+ */
+export function validateSkillAcquisitionCheckInClass(params: {
+  isSkillAcquisition: boolean
+  classOptions?: string[] | null
+  selectedClass?: string | null
+}): { valid: boolean; canonicalClass: string | null; error?: string } {
+  const trimmedInput = (params.selectedClass || '').trim()
+
+  if (params.isSkillAcquisition) {
+    const configured = normalizeClassOptions(params.classOptions)
+    if (configured.length === 0) {
+      return {
+        valid: false,
+        canonicalClass: null,
+        error: 'No classes are configured for this Skill Acquisition session. Please contact a session leader.'
+      }
+    }
+    if (!trimmedInput) {
+      return {
+        valid: false,
+        canonicalClass: null,
+        error: 'Please select a Skill Acquisition class to check in.'
+      }
+    }
+    const matched = configured.find(
+      (c) => c.toLowerCase() === trimmedInput.toLowerCase()
+    )
+    if (!matched) {
+      return {
+        valid: false,
+        canonicalClass: null,
+        error: `Selected class "${trimmedInput}" is not configured or available for this Skill Acquisition session.`
+      }
+    }
+    return {
+      valid: true,
+      canonicalClass: matched
+    }
+  }
+
+  if (trimmedInput) {
+    return {
+      valid: false,
+      canonicalClass: null,
+      error: 'Class selection is not applicable for this activity session.'
+    }
+  }
+
+  return {
+    valid: true,
+    canonicalClass: null
+  }
+}
+
+/**
  * Generates an unambiguous 6-character alphanumeric session code.
  * Excludes easily confusable characters: 0, O, 1, I, L.
  */
@@ -32,6 +183,7 @@ export interface CreateActivityParams {
   title: string
   description?: string
   category: string
+  classOptions?: string[] | null
   defaultParticipatingUnits?: string[] | null
 }
 
@@ -40,6 +192,7 @@ export interface ParsedActivityRow {
   title: string
   category: string
   description?: string
+  classOptions?: string[]
 }
 
 export interface ActivityCsvError {
@@ -66,6 +219,7 @@ export interface CreateSessionParams {
   maxTerminals: number
   participatingUnits?: string[] | null
   visitorRegistrationEnabled?: boolean
+  classOptions?: string[] | null
 }
 
 /**
@@ -189,7 +343,10 @@ export function parseActivitiesCsv(csvContent: string): {
   const headerRow = rows[0].map(h => h.trim().toLowerCase())
   const titleIdx = headerRow.findIndex(h => h === 'title' || h === 'activity title' || h === 'activity_title' || h === 'activity')
   const categoryIdx = headerRow.findIndex(h => h === 'category' || h === 'activity category' || h === 'activity_category')
-  const descIdx = headerRow.findIndex(h => h === 'description' || h === 'desc' || h === 'notes')
+  const descIdx = headerRow.findIndex(h => h === 'description' || h === 'desc' || h === 'notes' || h === 'location')
+  const classesIdx = headerRow.findIndex(
+    h => h === 'classes' || h === 'class_options' || h === 'class options' || h === 'skill_classes'
+  )
 
   if (titleIdx === -1 || categoryIdx === -1) {
     const missing: string[] = []
@@ -213,10 +370,11 @@ export function parseActivitiesCsv(csvContent: string): {
     dataRowCount++
     const rowNum = r + 1 // 1-based index matching human line numbering
     const title = (row[titleIdx] || '').trim()
-    const category = (row[categoryIdx] || '').trim()
+    const rawCategory = (row[categoryIdx] || '').trim()
     const description = descIdx !== -1 && row[descIdx] ? row[descIdx].trim() : undefined
+    const rawExplicitClasses = classesIdx !== -1 && row[classesIdx] ? row[classesIdx].trim() : undefined
 
-    if (!title && !category) {
+    if (!title && !rawCategory) {
       // Entirely blank data row
       continue
     }
@@ -226,17 +384,36 @@ export function parseActivitiesCsv(csvContent: string): {
       continue
     }
 
-    if (!category) {
+    if (!rawCategory) {
       errors.push({ row: rowNum, error: 'Activity category is required and cannot be blank.' })
       continue
     }
 
-    valid.push({
+    const { category, classOptions, hadColonSyntax } = parseSkillAcquisitionCategoryAndClasses(
+      rawCategory,
+      rawExplicitClasses
+    )
+
+    if (hadColonSyntax && classOptions.length === 0) {
+      errors.push({
+        row: rowNum,
+        error: 'Skill Acquisition category with colon syntax must specify at least one class option.'
+      })
+      continue
+    }
+
+    const rowEntry: ParsedActivityRow = {
       rowNumber: rowNum,
       title,
       category,
       description: description || undefined
-    })
+    }
+
+    if (classOptions.length > 0) {
+      rowEntry.classOptions = classOptions
+    }
+
+    valid.push(rowEntry)
   }
 
   return { valid, errors, totalRows: dataRowCount }
@@ -245,6 +422,10 @@ export function parseActivitiesCsv(csvContent: string): {
 export const activityService = {
   generateCode: generateSessionCode,
   calculateEffectiveLockTime,
+  normalizeClassOptions,
+  parseSkillAcquisitionCategoryAndClasses,
+  isSkillAcquisitionActivity,
+  validateSkillAcquisitionCheckInClass,
 
   async listActivities(): Promise<ActivityDefinition[]> {
     const { data, error } = await supabase
@@ -258,6 +439,7 @@ export const activityService = {
       title: a.title,
       description: a.description,
       category: a.category,
+      classOptions: Array.isArray(a.class_options) ? a.class_options : null,
       defaultParticipatingUnits: a.default_participating_units,
       createdBy: a.created_by,
       createdAt: a.created_at,
@@ -267,24 +449,37 @@ export const activityService = {
 
   async createActivity(params: CreateActivityParams, userId: string): Promise<ActivityDefinition> {
     const cleanTitle = (params.title || '').trim()
-    const cleanCategory = (params.category || '').trim()
+    const rawCategory = (params.category || '').trim()
 
     if (!cleanTitle) {
       throw new Error('Activity title is required.')
     }
-    if (!cleanCategory) {
+    if (!rawCategory) {
       throw new Error('Activity category is required and cannot be blank.')
+    }
+
+    const { category: cleanCategory, classOptions: resolvedClasses, hadColonSyntax } =
+      parseSkillAcquisitionCategoryAndClasses(rawCategory, params.classOptions)
+
+    if (hadColonSyntax && resolvedClasses.length === 0) {
+      throw new Error('Skill Acquisition activities must specify at least one configured class.')
+    }
+
+    const insertPayload: Record<string, any> = {
+      title: cleanTitle,
+      description: params.description?.trim() || null,
+      category: cleanCategory,
+      default_participating_units: params.defaultParticipatingUnits || null,
+      created_by: userId
+    }
+
+    if (resolvedClasses.length > 0) {
+      insertPayload.class_options = resolvedClasses
     }
 
     const { data, error } = await supabase
       .from('activities')
-      .insert({
-        title: cleanTitle,
-        description: params.description?.trim() || null,
-        category: cleanCategory,
-        default_participating_units: params.defaultParticipatingUnits || null,
-        created_by: userId
-      })
+      .insert(insertPayload)
       .select()
       .single()
 
@@ -294,9 +489,46 @@ export const activityService = {
       title: data.title,
       description: data.description,
       category: data.category,
+      classOptions: Array.isArray(data.class_options)
+        ? data.class_options
+        : resolvedClasses.length > 0
+        ? resolvedClasses
+        : null,
       defaultParticipatingUnits: data.default_participating_units,
       createdBy: data.created_by,
       createdAt: data.created_at
+    }
+  },
+
+  async updateActivityClasses(
+    activityId: string,
+    classOptions: string[],
+    reason: string = 'Updated Skill Acquisition class configuration'
+  ): Promise<{ success: boolean; classOptions?: string[]; error?: string }> {
+    const normalized = normalizeClassOptions(classOptions)
+    if (normalized.length === 0) {
+      return {
+        success: false,
+        error: 'At least one Skill Acquisition class must be configured.'
+      }
+    }
+
+    const { data, error } = await supabase.rpc('update_activity_classes', {
+      p_activity_id: activityId,
+      p_class_options: normalized,
+      p_reason: reason.trim() || 'Updated Skill Acquisition class configuration'
+    })
+
+    if (error) {
+      return { success: false, error: error.message }
+    }
+    const res = data as { success?: boolean; class_options?: string[]; error?: string } | null
+    if (res && res.success === false) {
+      return { success: false, error: res.error || 'Failed to update activity classes' }
+    }
+    return {
+      success: true,
+      classOptions: res?.class_options || normalized
     }
   },
 
@@ -314,12 +546,18 @@ export const activityService = {
     }
 
     // Insert records in batches or individually to isolate errors
-    const insertPayload = valid.map(v => ({
-      title: v.title,
-      category: v.category,
-      description: v.description || null,
-      created_by: userId
-    }))
+    const insertPayload = valid.map(v => {
+      const rowPayload: Record<string, any> = {
+        title: v.title,
+        category: v.category,
+        description: v.description || null,
+        created_by: userId
+      }
+      if (v.classOptions && v.classOptions.length > 0) {
+        rowPayload.class_options = v.classOptions
+      }
+      return rowPayload
+    })
 
     const { data, error } = await supabase
       .from('activities')
@@ -346,6 +584,7 @@ export const activityService = {
       title: d.title,
       description: d.description,
       category: d.category,
+      classOptions: Array.isArray(d.class_options) ? d.class_options : null,
       defaultParticipatingUnits: d.default_participating_units,
       createdBy: d.created_by,
       createdAt: d.created_at
@@ -370,6 +609,7 @@ export const activityService = {
     return (data || []).map((s: any) => ({
       id: s.id,
       activityId: s.activity_id,
+      classOptions: Array.isArray(s.class_options) ? s.class_options : null,
       sessionTitle: s.session_title,
       sessionDate: s.session_date,
       startTime: s.start_time,
@@ -399,21 +639,28 @@ export const activityService = {
   },
 
   async createSession(params: CreateSessionParams): Promise<ActivitySession> {
+    const normalizedClasses = normalizeClassOptions(params.classOptions)
+    const insertPayload: Record<string, any> = {
+      activity_id: params.activityId,
+      session_title: params.sessionTitle.trim(),
+      session_date: params.sessionDate,
+      start_time: params.startTime,
+      scheduled_end_time: params.scheduledEndTime || null,
+      grace_period_minutes: Math.max(0, Number(params.gracePeriodMinutes) || 0),
+      max_terminals: params.maxTerminals,
+      participating_units: params.participatingUnits || null,
+      visitor_registration_enabled: params.visitorRegistrationEnabled ?? true,
+      status: 'draft',
+      timezone: 'Africa/Lagos'
+    }
+
+    if (normalizedClasses.length > 0) {
+      insertPayload.class_options = normalizedClasses
+    }
+
     const { data, error } = await supabase
       .from('activity_sessions')
-      .insert({
-        activity_id: params.activityId,
-        session_title: params.sessionTitle.trim(),
-        session_date: params.sessionDate,
-        start_time: params.startTime,
-        scheduled_end_time: params.scheduledEndTime || null,
-        grace_period_minutes: Math.max(0, Number(params.gracePeriodMinutes) || 0),
-        max_terminals: params.maxTerminals,
-        participating_units: params.participatingUnits || null,
-        visitor_registration_enabled: params.visitorRegistrationEnabled ?? true,
-        status: 'draft',
-        timezone: 'Africa/Lagos'
-      })
+      .insert(insertPayload)
       .select()
       .single()
 
@@ -421,6 +668,11 @@ export const activityService = {
     return {
       id: data.id,
       activityId: data.activity_id,
+      classOptions: Array.isArray(data.class_options)
+        ? data.class_options
+        : normalizedClasses.length > 0
+        ? normalizedClasses
+        : null,
       sessionTitle: data.session_title,
       sessionDate: data.session_date,
       startTime: data.start_time,

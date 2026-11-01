@@ -9,6 +9,7 @@ export interface SubmitAttendanceParams {
   unitId?: string | null
   terminalToken?: string
   contactPhone?: string
+  selectedClass?: string | null
 }
 
 export interface AuthorizeTerminalResult {
@@ -18,6 +19,10 @@ export interface AuthorizeTerminalResult {
   sessionTitle?: string
   sessionDate?: string
   participatingUnits?: string[] | null
+  activityId?: string | null
+  activityTitle?: string | null
+  activityCategory?: string | null
+  classOptions?: string[] | null
   error?: string
 }
 
@@ -31,6 +36,7 @@ export interface ManualAttendanceParams {
   sessionId: string
   memberId: string
   notes?: string
+  selectedClass?: string | null
 }
 
 const STORAGE_KEY_TOKEN = 'ysaams_terminal_token'
@@ -39,6 +45,9 @@ const STORAGE_KEY_TERMINAL_ID = 'ysaams_terminal_id'
 const STORAGE_KEY_SESSION_TITLE = 'ysaams_terminal_session_title'
 const STORAGE_KEY_SESSION_DATE = 'ysaams_terminal_session_date'
 const STORAGE_KEY_PARTICIPATING_UNITS = 'ysaams_terminal_participating_units'
+const STORAGE_KEY_ACTIVITY_CATEGORY = 'ysaams_terminal_activity_category'
+const STORAGE_KEY_ACTIVITY_TITLE = 'ysaams_terminal_activity_title'
+const STORAGE_KEY_CLASS_OPTIONS = 'ysaams_terminal_class_options'
 
 /**
  * Maps raw database/RPC/network error messages into warm, friendly, actionable text.
@@ -72,6 +81,21 @@ export function humanizeTerminalError(error?: string | null): string {
 
   if (err.includes('not participating') || err.includes('not an authorized participating unit')) {
     return 'The selected ward or branch is not participating in this specific session. Please choose an authorized unit.'
+  }
+  if (err.includes('select a skill acquisition class')) {
+    return 'Please select the Skill Acquisition class you are attending to check in.'
+  }
+  if (
+    err.includes('not configured or available for this skill acquisition') ||
+    err.includes('not configured for this skill acquisition')
+  ) {
+    return 'The selected class is not available for this Skill Acquisition session. Please choose one of the listed classes.'
+  }
+  if (err.includes('no classes are configured for this skill acquisition')) {
+    return 'No classes have been configured for this Skill Acquisition session yet. Please ask a session leader for assistance.'
+  }
+  if (err.includes('class selection is not applicable')) {
+    return 'Class selection is not required for this activity session.'
   }
   if (err.includes('visitor registration is disabled')) {
     return 'Visitor check-in is not enabled for this session. Please speak with an activity leader.'
@@ -110,9 +134,22 @@ class AttendanceService {
     sessionTitle: string | null
     sessionDate: string | null
     participatingUnits: string[] | null
+    activityTitle?: string | null
+    activityCategory?: string | null
+    classOptions?: string[] | null
   } {
     if (typeof window === 'undefined') {
-      return { token: null, sessionId: null, terminalId: null, sessionTitle: null, sessionDate: null, participatingUnits: null }
+      return {
+        token: null,
+        sessionId: null,
+        terminalId: null,
+        sessionTitle: null,
+        sessionDate: null,
+        participatingUnits: null,
+        activityTitle: null,
+        activityCategory: null,
+        classOptions: null
+      }
     }
     try {
       let participatingUnits: string[] | null = null
@@ -122,16 +159,37 @@ class AttendanceService {
           participatingUnits = JSON.parse(rawUnits)
         } catch {}
       }
+      let classOptions: string[] | null = null
+      const rawClasses = sessionStorage.getItem(STORAGE_KEY_CLASS_OPTIONS)
+      if (rawClasses) {
+        try {
+          const parsed = JSON.parse(rawClasses)
+          if (Array.isArray(parsed)) classOptions = parsed
+        } catch {}
+      }
       return {
         token: sessionStorage.getItem(STORAGE_KEY_TOKEN),
         sessionId: sessionStorage.getItem(STORAGE_KEY_SESSION_ID),
         terminalId: sessionStorage.getItem(STORAGE_KEY_TERMINAL_ID),
         sessionTitle: sessionStorage.getItem(STORAGE_KEY_SESSION_TITLE),
         sessionDate: sessionStorage.getItem(STORAGE_KEY_SESSION_DATE),
-        participatingUnits
+        participatingUnits,
+        activityTitle: sessionStorage.getItem(STORAGE_KEY_ACTIVITY_TITLE),
+        activityCategory: sessionStorage.getItem(STORAGE_KEY_ACTIVITY_CATEGORY),
+        classOptions
       }
     } catch {
-      return { token: null, sessionId: null, terminalId: null, sessionTitle: null, sessionDate: null, participatingUnits: null }
+      return {
+        token: null,
+        sessionId: null,
+        terminalId: null,
+        sessionTitle: null,
+        sessionDate: null,
+        participatingUnits: null,
+        activityTitle: null,
+        activityCategory: null,
+        classOptions: null
+      }
     }
   }
 
@@ -163,6 +221,10 @@ class AttendanceService {
         session_title: string
         session_date: string
         participating_units?: string[] | null
+        activity_id?: string | null
+        activity_title?: string | null
+        activity_category?: string | null
+        class_options?: string[] | null
         terminal_id: string
         terminal_token: string
         reconnected: boolean
@@ -189,6 +251,21 @@ class AttendanceService {
         } else {
           sessionStorage.removeItem(STORAGE_KEY_PARTICIPATING_UNITS)
         }
+        if (result.activity_title) {
+          sessionStorage.setItem(STORAGE_KEY_ACTIVITY_TITLE, result.activity_title)
+        } else {
+          sessionStorage.removeItem(STORAGE_KEY_ACTIVITY_TITLE)
+        }
+        if (result.activity_category) {
+          sessionStorage.setItem(STORAGE_KEY_ACTIVITY_CATEGORY, result.activity_category)
+        } else {
+          sessionStorage.removeItem(STORAGE_KEY_ACTIVITY_CATEGORY)
+        }
+        if (Array.isArray(result.class_options) && result.class_options.length > 0) {
+          sessionStorage.setItem(STORAGE_KEY_CLASS_OPTIONS, JSON.stringify(result.class_options))
+        } else {
+          sessionStorage.removeItem(STORAGE_KEY_CLASS_OPTIONS)
+        }
       }
 
       // Start the heartbeat timer (every 4 minutes, since lease expires in 10 minutes)
@@ -209,7 +286,11 @@ class AttendanceService {
         sessionId: result.session_id,
         sessionTitle: result.session_title,
         sessionDate: result.session_date,
-        participatingUnits: result.participating_units || null
+        participatingUnits: result.participating_units || null,
+        activityId: result.activity_id || null,
+        activityTitle: result.activity_title || null,
+        activityCategory: result.activity_category || null,
+        classOptions: Array.isArray(result.class_options) ? result.class_options : null
       }
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Unexpected authorization error'
@@ -311,6 +392,9 @@ class AttendanceService {
       sessionStorage.removeItem(STORAGE_KEY_SESSION_TITLE)
       sessionStorage.removeItem(STORAGE_KEY_SESSION_DATE)
       sessionStorage.removeItem(STORAGE_KEY_PARTICIPATING_UNITS)
+      sessionStorage.removeItem(STORAGE_KEY_ACTIVITY_TITLE)
+      sessionStorage.removeItem(STORAGE_KEY_ACTIVITY_CATEGORY)
+      sessionStorage.removeItem(STORAGE_KEY_CLASS_OPTIONS)
     } catch {
       // Storage unavailable
     }
@@ -393,7 +477,7 @@ class AttendanceService {
 
   /**
    * Submits attendance via active terminal kiosk.
-   * Supports attendance without prior registration (Requirement A).
+   * Supports attendance without prior registration (Requirement A) and Skill Acquisition class selection.
    */
   async recordAttendance(
     params: SubmitAttendanceParams
@@ -404,8 +488,10 @@ class AttendanceService {
         return { success: false, error: 'Terminal bearer token not found. Please reconnect terminal.' }
       }
 
-      // 1. Try unified record_terminal_checkin RPC (supports un-enrolled members and visitors)
-      const { data: checkinData, error: checkinErr } = await supabase.rpc('record_terminal_checkin', {
+      const cleanSelectedClass = params.selectedClass?.trim() || null
+
+      // 1. Try unified record_terminal_checkin RPC (supports un-enrolled members, visitors, and Skill Acquisition classes)
+      const checkinPayload: Record<string, any> = {
         p_session_id: params.sessionId,
         p_terminal_token: token,
         p_attendee_name: params.attendeeName.trim(),
@@ -413,15 +499,25 @@ class AttendanceService {
         p_is_non_member: params.isNonMember,
         p_member_id: params.memberId || null,
         p_contact_phone: params.contactPhone?.trim() || null
-      })
+      }
+      if (cleanSelectedClass) {
+        checkinPayload.p_selected_class = cleanSelectedClass
+      }
+
+      const { data: checkinData, error: checkinErr } = await supabase.rpc(
+        'record_terminal_checkin',
+        checkinPayload
+      )
 
       if (!checkinErr) {
         const res = checkinData as {
           success: boolean
           attendance_id?: string
+          visitor_id?: string
           member_id?: string
           attendee_name?: string
           is_non_member?: boolean
+          selected_class?: string | null
           check_in_time?: string
           error?: string
         }
@@ -429,12 +525,13 @@ class AttendanceService {
           return {
             success: true,
             record: {
-              id: res.attendance_id || 'unknown',
+              id: res.attendance_id || res.visitor_id || 'unknown',
               sessionId: params.sessionId,
               memberId: res.member_id,
               attendeeName: res.attendee_name || params.attendeeName,
               isNonMember: res.is_non_member ?? params.isNonMember,
               unitId: params.unitId,
+              selectedClass: res.selected_class !== undefined ? res.selected_class : cleanSelectedClass,
               checkInTime: res.check_in_time || new Date().toISOString()
             }
           }
@@ -442,13 +539,13 @@ class AttendanceService {
           return { success: false, error: res.error }
         }
       } else {
-        // If checkinErr is a known business error (duplicate, lock expired, not participating, invalid token), return directly
+        // If checkinErr is a known business error (duplicate, lock expired, not participating, class validation, invalid token), return directly
         const errMsg = checkinErr.message || ''
         const errCode = (checkinErr as any).code || ''
         if (
           errCode === '23505' ||
           errCode === 'P0001' ||
-          /already recorded|scheduled end time|not participating|expired|unauthorized/i.test(errMsg)
+          /already recorded|scheduled end time|not participating|expired|unauthorized|skill acquisition|class/i.test(errMsg)
         ) {
           return { success: false, error: errMsg }
         }
@@ -456,20 +553,30 @@ class AttendanceService {
 
       // 2. Fallback to specialized RPCs if record_terminal_checkin is not yet deployed (e.g. 404 or function not found)
       if (params.isNonMember) {
-        const { data, error } = await supabase.rpc('record_visitor_attendance', {
+        const visitorPayload: Record<string, any> = {
           p_session_id: params.sessionId,
           p_full_name: params.attendeeName.trim(),
           p_contact_phone: params.contactPhone?.trim() || '',
           p_is_church_member: false,
           p_inviting_unit_id: params.unitId || null,
           p_terminal_token: token
-        })
+        }
+        if (cleanSelectedClass) {
+          visitorPayload.p_selected_class = cleanSelectedClass
+        }
+
+        const { data, error } = await supabase.rpc('record_visitor_attendance', visitorPayload)
 
         if (error) {
           return { success: false, error: error.message }
         }
 
-        const res = data as { success: boolean; visitor_id?: string; error?: string }
+        const res = data as {
+          success: boolean
+          visitor_id?: string
+          selected_class?: string | null
+          error?: string
+        }
         if (!res?.success) {
           return { success: false, error: res?.error || 'Failed to record visitor attendance' }
         }
@@ -482,6 +589,7 @@ class AttendanceService {
             attendeeName: params.attendeeName,
             isNonMember: true,
             unitId: params.unitId,
+            selectedClass: res.selected_class !== undefined ? res.selected_class : cleanSelectedClass,
             checkInTime: new Date().toISOString()
           }
         }
@@ -493,17 +601,27 @@ class AttendanceService {
           }
         }
 
-        const { data, error } = await supabase.rpc('record_attendance', {
+        const memberPayload: Record<string, any> = {
           p_session_id: params.sessionId,
           p_member_id: params.memberId,
           p_terminal_token: token
-        })
+        }
+        if (cleanSelectedClass) {
+          memberPayload.p_selected_class = cleanSelectedClass
+        }
+
+        const { data, error } = await supabase.rpc('record_attendance', memberPayload)
 
         if (error) {
           return { success: false, error: error.message }
         }
 
-        const res = data as { success: boolean; attendance_id?: string; error?: string }
+        const res = data as {
+          success: boolean
+          attendance_id?: string
+          selected_class?: string | null
+          error?: string
+        }
         if (!res?.success) {
           return { success: false, error: res?.error || 'Failed to record member attendance' }
         }
@@ -517,6 +635,7 @@ class AttendanceService {
             attendeeName: params.attendeeName,
             isNonMember: false,
             unitId: params.unitId,
+            selectedClass: res.selected_class !== undefined ? res.selected_class : cleanSelectedClass,
             checkInTime: new Date().toISOString()
           }
         }
@@ -534,11 +653,17 @@ class AttendanceService {
     params: ManualAttendanceParams
   ): Promise<AttendanceSubmissionResult> {
     try {
-      const { data, error } = await supabase.rpc('record_manual_attendance', {
+      const cleanSelectedClass = params.selectedClass?.trim() || null
+      const manualPayload: Record<string, any> = {
         p_session_id: params.sessionId,
         p_member_id: params.memberId,
         p_notes: params.notes?.trim() || null
-      })
+      }
+      if (cleanSelectedClass) {
+        manualPayload.p_selected_class = cleanSelectedClass
+      }
+
+      const { data, error } = await supabase.rpc('record_manual_attendance', manualPayload)
 
       if (error) {
         return { success: false, error: error.message }
@@ -548,6 +673,7 @@ class AttendanceService {
         success: boolean
         attendance_id?: string
         member_name?: string
+        selected_class?: string | null
         check_in_time?: string
         error?: string
       }
@@ -564,6 +690,7 @@ class AttendanceService {
           memberId: params.memberId,
           attendeeName: res.member_name || 'Member',
           isNonMember: false,
+          selectedClass: res.selected_class !== undefined ? res.selected_class : cleanSelectedClass,
           checkInTime: res.check_in_time || new Date().toISOString()
         }
       }
