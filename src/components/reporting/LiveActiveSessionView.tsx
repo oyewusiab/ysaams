@@ -38,7 +38,7 @@ import {
   Filter
 } from 'lucide-react'
 
-interface LiveActiveSessionViewProps {
+export interface LiveActiveSessionViewProps {
   session: ActivitySession
   activity?: ActivityDefinition | null
   units: StakeUnit[]
@@ -46,14 +46,495 @@ interface LiveActiveSessionViewProps {
   onClose?: () => void
 }
 
-interface RecentCheckInItem {
+export interface RecentCheckInItem {
   id: string
+  attendeeId: string
   attendeeName: string
   attendeeType: 'member' | 'visitor'
+  unitId: string | null
   unitName: string
   selectedClass?: string | null
   checkInTime: string
   isManual: boolean
+}
+
+export interface LiveUnitBreakdownRow {
+  unitId: string
+  unitName: string
+  members: number
+  visitors: number
+  total: number
+  isUnassigned?: boolean
+}
+
+export interface LiveClassBreakdownRow {
+  className: string
+  members: number
+  visitors: number
+  total: number
+  isConfigured: boolean
+}
+
+export interface ComputeLiveSessionMetricsParams {
+  sessionId: string
+  sessionStatus?: string
+  rawMemberRows: any[]
+  rawVisitorRows: any[]
+  units: StakeUnit[]
+  participatingUnits?: string[] | null
+  authorizedUnitIds?: string[] | null
+  configuredClasses?: string[] | null
+  isSkillAcquisition?: boolean
+  selectedClassFilter?: string
+  memberDirectoryMap?: Map<string, { fullName: string; homeUnitId?: string | null }>
+}
+
+export interface LiveSessionComputedSnapshot {
+  allMemberRecords: AttendanceRecord[]
+  allVisitorRecords: {
+    id: string
+    sessionId: string
+    fullName: string
+    contactPhone?: string | null
+    isChurchMember: boolean
+    invitingUnitId: string | null
+    invitingUnitName: string
+    selectedClass: string | null
+    checkInTime: string
+  }[]
+  filteredMemberRecords: AttendanceRecord[]
+  filteredVisitorRecords: {
+    id: string
+    sessionId: string
+    fullName: string
+    contactPhone?: string | null
+    isChurchMember: boolean
+    invitingUnitId: string | null
+    invitingUnitName: string
+    selectedClass: string | null
+    checkInTime: string
+  }[]
+  totalValidCheckIns: number
+  distinctAttendeesCount: number
+  memberCount: number
+  visitorCount: number
+  unitBreakdown: LiveUnitBreakdownRow[]
+  classBreakdown: LiveClassBreakdownRow[]
+  recentItems: RecentCheckInItem[]
+  filteredRecentItems: RecentCheckInItem[]
+  reconciled: {
+    memberVisitorReconciled: boolean
+    unitBreakdownReconciled: boolean
+    classBreakdownReconciled: boolean
+  }
+}
+
+/**
+ * Pure, deterministic reconciliation engine for Live Session Monitoring.
+ * - Filters strictly to the target sessionId and excludes cancelled/invalid rows.
+ * - Deduplicates repeated realtime deliveries by record ID and enforces unique (session_id, member_id).
+ * - Computes distinct attendees using stable database IDs (never names alone).
+ * - Guarantees 100% reconciliation across total check-ins, members vs visitors, unit breakdown
+ *   (including transparent Unassigned unit handling), and Skill Acquisition class breakdown.
+ */
+export function computeLiveSessionMetrics(
+  params: ComputeLiveSessionMetricsParams
+): LiveSessionComputedSnapshot {
+  const {
+    sessionId,
+    sessionStatus,
+    rawMemberRows,
+    rawVisitorRows,
+    units,
+    participatingUnits,
+    authorizedUnitIds = null,
+    configuredClasses = [],
+    isSkillAcquisition = false,
+    selectedClassFilter = 'all',
+    memberDirectoryMap
+  } = params
+
+  const unitMap = new Map<string, string>()
+  for (const u of units || []) {
+    if (u && u.id) {
+      unitMap.set(u.id, u.unitName)
+    }
+  }
+
+  // If the session itself is cancelled, no attendance records are valid for an active monitor
+  const isSessionCancelled = sessionStatus === 'cancelled'
+  const isScopeEmpty = Array.isArray(authorizedUnitIds) && authorizedUnitIds.length === 0
+
+  const seenMemberRecordIds = new Set<string>()
+  const seenMemberPersonIds = new Set<string>()
+  const allMemberRecords: AttendanceRecord[] = []
+
+  if (!isSessionCancelled && !isScopeEmpty) {
+    // Sort raw member rows by check_in_time ascending first so the earliest record wins on duplicate member_id
+    const sortedRawMembers = [...(rawMemberRows || [])].sort((a, b) => {
+      const tA = new Date(a?.check_in_time || a?.checkInTime || a?.created_at || 0).getTime()
+      const tB = new Date(b?.check_in_time || b?.checkInTime || b?.created_at || 0).getTime()
+      return tA - tB
+    })
+
+    for (const r of sortedRawMembers) {
+      if (!r || !r.id) continue
+      const rowSessionId = r.session_id ?? r.sessionId
+      if (rowSessionId && rowSessionId !== sessionId) continue
+      if (r.is_cancelled === true || r.status === 'cancelled' || r.status === 'invalid') continue
+
+      const recordId = String(r.id)
+      if (seenMemberRecordIds.has(recordId)) continue
+
+      const memberId = r.member_id ?? r.memberId ?? r.members?.id ?? null
+      const directoryEntry = memberId && memberDirectoryMap ? memberDirectoryMap.get(memberId) : undefined
+      const unitId: string | null =
+        r.recorded_unit_id ??
+        r.unitId ??
+        r.members?.home_unit_id ??
+        directoryEntry?.homeUnitId ??
+        null
+
+      if (Array.isArray(authorizedUnitIds)) {
+        if (!unitId || !authorizedUnitIds.includes(unitId)) continue
+      }
+
+      // Enforce unique (session_id, member_id) invariant so duplicate check-in attempts are never double-counted
+      const stableMemberKey = memberId ? String(memberId) : `rec:${recordId}`
+      if (seenMemberPersonIds.has(stableMemberKey)) {
+        continue
+      }
+
+      seenMemberRecordIds.add(recordId)
+      seenMemberPersonIds.add(stableMemberKey)
+
+      const resolvedName =
+        r.members?.full_name ||
+        directoryEntry?.fullName ||
+        r.attendee_name ||
+        r.attendeeName ||
+        'Member'
+
+      const resolvedUnitName =
+        r.stake_units?.unit_name ||
+        (unitId ? unitMap.get(unitId) : undefined) ||
+        r.unitName ||
+        (unitId ? 'Unit' : 'Unassigned / No Unit Specified')
+
+      const isManual =
+        r.is_manual !== undefined
+          ? Boolean(r.is_manual)
+          : r.isManual !== undefined
+          ? Boolean(r.isManual)
+          : r.recorded_by_terminal_id === null
+
+      const rawClass = r.selected_class ?? r.selectedClass
+      const cleanClass =
+        typeof rawClass === 'string' && rawClass.trim().length > 0 ? rawClass.trim() : null
+
+      allMemberRecords.push({
+        id: recordId,
+        sessionId,
+        memberId: memberId ? String(memberId) : null,
+        attendeeName: String(resolvedName).trim() || 'Member',
+        isNonMember: false,
+        unitId,
+        unitName: resolvedUnitName,
+        selectedClass: cleanClass,
+        checkInTime: r.check_in_time || r.checkInTime || r.created_at || new Date().toISOString(),
+        recordedByTerminalId: r.recorded_by_terminal_id ?? r.recordedByTerminalId ?? null,
+        isManual
+      })
+    }
+  }
+
+  const seenVisitorRecordIds = new Set<string>()
+  const allVisitorRecords: LiveSessionComputedSnapshot['allVisitorRecords'] = []
+
+  if (!isSessionCancelled && !isScopeEmpty) {
+    const sortedRawVisitors = [...(rawVisitorRows || [])].sort((a, b) => {
+      const tA = new Date(a?.created_at || a?.checkInTime || 0).getTime()
+      const tB = new Date(b?.created_at || b?.checkInTime || 0).getTime()
+      return tA - tB
+    })
+
+    for (const v of sortedRawVisitors) {
+      if (!v || !v.id) continue
+      const rowSessionId = v.session_id ?? v.sessionId
+      if (rowSessionId && rowSessionId !== sessionId) continue
+      if (v.is_cancelled === true || v.status === 'cancelled' || v.status === 'invalid') continue
+
+      const visitorRecordId = String(v.id)
+      if (seenVisitorRecordIds.has(visitorRecordId)) continue
+
+      const invitingUnitId: string | null =
+        v.inviting_unit_id ?? v.invitingUnitId ?? v.unitId ?? null
+
+      if (Array.isArray(authorizedUnitIds)) {
+        if (!invitingUnitId || !authorizedUnitIds.includes(invitingUnitId)) continue
+      }
+
+      seenVisitorRecordIds.add(visitorRecordId)
+
+      const resolvedVisitorName = String(v.full_name || v.fullName || v.attendeeName || 'Visitor').trim() || 'Visitor'
+      const resolvedVisitorUnitName =
+        v.stake_units?.unit_name ||
+        (invitingUnitId ? unitMap.get(invitingUnitId) : undefined) ||
+        v.invitingUnitName ||
+        (invitingUnitId ? 'Unit' : 'Unassigned / No Inviting Unit')
+
+      const rawClass = v.selected_class ?? v.selectedClass
+      const cleanClass =
+        typeof rawClass === 'string' && rawClass.trim().length > 0 ? rawClass.trim() : null
+
+      allVisitorRecords.push({
+        id: visitorRecordId,
+        sessionId,
+        fullName: resolvedVisitorName,
+        contactPhone: v.contact_phone ?? v.contactPhone ?? null,
+        isChurchMember: Boolean(v.is_church_member ?? v.isChurchMember ?? false),
+        invitingUnitId,
+        invitingUnitName: resolvedVisitorUnitName,
+        selectedClass: cleanClass,
+        checkInTime: v.created_at || v.checkInTime || new Date().toISOString()
+      })
+    }
+  }
+
+  // Skill Acquisition Class Breakdown across all valid records for the session
+  const normalizedConfiguredClasses = normalizeClassOptions(configuredClasses)
+  const classMap = new Map<string, LiveClassBreakdownRow>()
+  for (const cls of normalizedConfiguredClasses) {
+    classMap.set(cls.toLowerCase(), {
+      className: cls,
+      members: 0,
+      visitors: 0,
+      total: 0,
+      isConfigured: true
+    })
+  }
+
+  let unassignedClassMembers = 0
+  let unassignedClassVisitors = 0
+
+  for (const m of allMemberRecords) {
+    const raw = m.selectedClass ? m.selectedClass.trim() : ''
+    if (!raw) {
+      unassignedClassMembers++
+      continue
+    }
+    const key = raw.toLowerCase()
+    const existing = classMap.get(key) || {
+      className: raw,
+      members: 0,
+      visitors: 0,
+      total: 0,
+      isConfigured: false
+    }
+    existing.members++
+    existing.total++
+    classMap.set(key, existing)
+  }
+
+  for (const v of allVisitorRecords) {
+    const raw = v.selectedClass ? v.selectedClass.trim() : ''
+    if (!raw) {
+      unassignedClassVisitors++
+      continue
+    }
+    const key = raw.toLowerCase()
+    const existing = classMap.get(key) || {
+      className: raw,
+      members: 0,
+      visitors: 0,
+      total: 0,
+      isConfigured: false
+    }
+    existing.visitors++
+    existing.total++
+    classMap.set(key, existing)
+  }
+
+  const classBreakdown: LiveClassBreakdownRow[] = Array.from(classMap.values())
+  if (
+    unassignedClassMembers + unassignedClassVisitors > 0 &&
+    (isSkillAcquisition || classBreakdown.length > 0)
+  ) {
+    classBreakdown.push({
+      className: 'Unassigned / Not Specified',
+      members: unassignedClassMembers,
+      visitors: unassignedClassVisitors,
+      total: unassignedClassMembers + unassignedClassVisitors,
+      isConfigured: false
+    })
+  }
+
+  // Filter records by active selectedClassFilter
+  const filteredMemberRecords = allMemberRecords.filter((m) => {
+    if (selectedClassFilter === 'all') return true
+    if (selectedClassFilter === '__unassigned__') {
+      return !m.selectedClass || !m.selectedClass.trim()
+    }
+    return (m.selectedClass || '').trim().toLowerCase() === selectedClassFilter.toLowerCase()
+  })
+
+  const filteredVisitorRecords = allVisitorRecords.filter((v) => {
+    if (selectedClassFilter === 'all') return true
+    if (selectedClassFilter === '__unassigned__') {
+      return !v.selectedClass || !v.selectedClass.trim()
+    }
+    return (v.selectedClass || '').trim().toLowerCase() === selectedClassFilter.toLowerCase()
+  })
+
+  const memberCount = filteredMemberRecords.length
+  const visitorCount = filteredVisitorRecords.length
+  const totalValidCheckIns = memberCount + visitorCount
+
+  // Distinct attendees using stable database IDs (never names alone)
+  const distinctMemberIds = new Set(
+    filteredMemberRecords.map((m) => m.memberId || `mem_rec:${m.id}`)
+  )
+  const distinctVisitorIds = new Set(
+    filteredVisitorRecords.map((v) => `vis_rec:${v.id}`)
+  )
+  const distinctAttendeesCount = distinctMemberIds.size + distinctVisitorIds.size
+
+  // Participating Units Breakdown (100% reconciled with filteredMemberRecords + filteredVisitorRecords)
+  const baseUnitIds =
+    participatingUnits && participatingUnits.length > 0
+      ? [...participatingUnits]
+      : units.map((u) => u.id)
+
+  const orderedUnitIds: string[] = []
+  const seenUnitIds = new Set<string>()
+
+  for (const uid of baseUnitIds) {
+    if (!uid || seenUnitIds.has(uid)) continue
+    if (Array.isArray(authorizedUnitIds) && !authorizedUnitIds.includes(uid)) continue
+    seenUnitIds.add(uid)
+    orderedUnitIds.push(uid)
+  }
+
+  // Also include any unit ID referenced by a valid attendance record that wasn't in baseUnitIds
+  for (const m of filteredMemberRecords) {
+    if (m.unitId && !seenUnitIds.has(m.unitId)) {
+      if (!Array.isArray(authorizedUnitIds) || authorizedUnitIds.includes(m.unitId)) {
+        seenUnitIds.add(m.unitId)
+        orderedUnitIds.push(m.unitId)
+      }
+    }
+  }
+  for (const v of filteredVisitorRecords) {
+    if (v.invitingUnitId && !seenUnitIds.has(v.invitingUnitId)) {
+      if (!Array.isArray(authorizedUnitIds) || authorizedUnitIds.includes(v.invitingUnitId)) {
+        seenUnitIds.add(v.invitingUnitId)
+        orderedUnitIds.push(v.invitingUnitId)
+      }
+    }
+  }
+
+  const unitBreakdown: LiveUnitBreakdownRow[] = orderedUnitIds.map((uid) => {
+    const mCount = filteredMemberRecords.filter((m) => m.unitId === uid).length
+    const vCount = filteredVisitorRecords.filter((v) => v.invitingUnitId === uid).length
+    const fallbackName =
+      filteredMemberRecords.find((m) => m.unitId === uid)?.unitName ||
+      filteredVisitorRecords.find((v) => v.invitingUnitId === uid)?.invitingUnitName ||
+      'Unit'
+    return {
+      unitId: uid,
+      unitName: unitMap.get(uid) || fallbackName,
+      members: mCount,
+      visitors: vCount,
+      total: mCount + vCount
+    }
+  })
+
+  // Transparently account for any valid records without a unit (e.g., guests with inviting_unit_id = NULL)
+  const unassignedUnitMembers = filteredMemberRecords.filter((m) => !m.unitId).length
+  const unassignedUnitVisitors = filteredVisitorRecords.filter((v) => !v.invitingUnitId).length
+  if (unassignedUnitMembers + unassignedUnitVisitors > 0) {
+    unitBreakdown.push({
+      unitId: '__unassigned_unit__',
+      unitName: 'Unassigned / No Inviting Unit',
+      members: unassignedUnitMembers,
+      visitors: unassignedUnitVisitors,
+      total: unassignedUnitMembers + unassignedUnitVisitors,
+      isUnassigned: true
+    })
+  }
+
+  // Build unified recent check-in stream (sorted newest first, tie-broken by ID)
+  const buildRecentList = (
+    memList: AttendanceRecord[],
+    visList: LiveSessionComputedSnapshot['allVisitorRecords']
+  ): RecentCheckInItem[] => {
+    const list: RecentCheckInItem[] = []
+    for (const m of memList) {
+      list.push({
+        id: m.id,
+        attendeeId: m.memberId || m.id,
+        attendeeName: m.attendeeName,
+        attendeeType: 'member',
+        unitId: m.unitId || null,
+        unitName: m.unitName || 'Unit',
+        selectedClass: m.selectedClass || null,
+        checkInTime: m.checkInTime,
+        isManual: Boolean(m.isManual)
+      })
+    }
+    for (const v of visList) {
+      list.push({
+        id: v.id,
+        attendeeId: v.id,
+        attendeeName: v.fullName,
+        attendeeType: 'visitor',
+        unitId: v.invitingUnitId || null,
+        unitName: v.invitingUnitName,
+        selectedClass: v.selectedClass || null,
+        checkInTime: v.checkInTime,
+        isManual: false
+      })
+    }
+    list.sort((a, b) => {
+      const diff = new Date(b.checkInTime).getTime() - new Date(a.checkInTime).getTime()
+      if (diff !== 0) return diff
+      return a.id.localeCompare(b.id)
+    })
+    return list
+  }
+
+  const recentItems = buildRecentList(allMemberRecords, allVisitorRecords)
+  const filteredRecentItems = buildRecentList(filteredMemberRecords, filteredVisitorRecords).slice(
+    0,
+    25
+  )
+
+  const unitSum = unitBreakdown.reduce((sum, u) => sum + u.total, 0)
+  const allValidTotal = allMemberRecords.length + allVisitorRecords.length
+  const classSum =
+    classBreakdown.length > 0
+      ? classBreakdown.reduce((sum, c) => sum + c.total, 0)
+      : allValidTotal
+
+  return {
+    allMemberRecords,
+    allVisitorRecords,
+    filteredMemberRecords,
+    filteredVisitorRecords,
+    totalValidCheckIns,
+    distinctAttendeesCount,
+    memberCount,
+    visitorCount,
+    unitBreakdown,
+    classBreakdown,
+    recentItems,
+    filteredRecentItems,
+    reconciled: {
+      memberVisitorReconciled: memberCount + visitorCount === totalValidCheckIns,
+      unitBreakdownReconciled: unitSum === totalValidCheckIns,
+      classBreakdownReconciled: classSum === allValidTotal
+    }
+  }
 }
 
 export const LiveActiveSessionView: React.FC<LiveActiveSessionViewProps> = ({
@@ -63,12 +544,16 @@ export const LiveActiveSessionView: React.FC<LiveActiveSessionViewProps> = ({
   activeCode: propCode,
   onClose
 }) => {
-  const { isStakeLeader, reportUnitFilter, manageableUnitIds } = useAuth()
+  const { hasStakeWideReadAccess, reportUnitFilter, assignedUnitIds } = useAuth()
 
-  // Authorized unit filter for leader's scoping
-  const authorizedUnitIds = isStakeLeader
-    ? null
-    : (reportUnitFilter && reportUnitFilter.length > 0 ? reportUnitFilter : manageableUnitIds)
+  // Authorized unit filter for leader's scoping:
+  // - Stake-wide roles (system_admin, stake_presidency, stake_clerk) have null filter (all units).
+  // - Unit-scoped roles (ysa_leader, bishop, branch_president, ward_clerk, branch_clerk) are scoped to their assignedUnitIds.
+  const authorizedUnitIds = useMemo<string[] | null>(() => {
+    if (hasStakeWideReadAccess) return null
+    if (reportUnitFilter !== null) return reportUnitFilter
+    return assignedUnitIds
+  }, [hasStakeWideReadAccess, reportUnitFilter, assignedUnitIds])
 
   // Session code: prioritize prop, fallback to persistent storage
   const [currentCode] = useState<string | null>(() => {
@@ -76,17 +561,25 @@ export const LiveActiveSessionView: React.FC<LiveActiveSessionViewProps> = ({
     return getActiveSessionCode(session.id)
   })
 
-  // Live reporting state
-  const [memberRecords, setMemberRecords] = useState<AttendanceRecord[]>([])
-  const [visitorRecords, setVisitorRecords] = useState<any[]>([])
-  const [recentItems, setRecentItems] = useState<RecentCheckInItem[]>([])
+  // Raw authoritative database rows
+  const [rawMemberRows, setRawMemberRows] = useState<any[]>([])
+  const [rawVisitorRows, setRawVisitorRows] = useState<any[]>([])
+  const [memberDirectoryMap, setMemberDirectoryMap] = useState<
+    Map<string, { fullName: string; homeUnitId?: string | null }>
+  >(() => new Map())
+
   const [selectedClassFilter, setSelectedClassFilter] = useState<string>('all')
   const [isLoading, setIsLoading] = useState(true)
+  const [hasLoadedOnce, setHasLoadedOnce] = useState(false)
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [statusState, setStatusState] = useState<'live' | 'refreshing' | 'stale'>('refreshing')
-  const [lastUpdated, setLastUpdated] = useState<string>(new Date().toISOString())
+  const [realtimeSubscribed, setRealtimeSubscribed] = useState(false)
+  const [lastUpdated, setLastUpdated] = useState<string | null>(null)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [feedbackToast, setFeedbackToast] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+
+  // Monotonic sequence counter to discard out-of-order concurrent responses
+  const requestSeqRef = useRef(0)
 
   const configuredClasses = useMemo(
     () => normalizeClassOptions(session.classOptions ?? activity?.classOptions),
@@ -100,16 +593,15 @@ export const LiveActiveSessionView: React.FC<LiveActiveSessionViewProps> = ({
         title: session.activityTitle ?? activity?.title ?? session.sessionTitle,
         classOptions: configuredClasses
       }),
-    [session.activityCategory, session.activityTitle, session.sessionTitle, activity?.category, activity?.title, configuredClasses]
+    [
+      session.activityCategory,
+      session.activityTitle,
+      session.sessionTitle,
+      activity?.category,
+      activity?.title,
+      configuredClasses
+    ]
   )
-
-  // Map units for quick lookup
-  const unitMap = useRef(new Map<string, string>())
-  useEffect(() => {
-    const map = new Map<string, string>()
-    units.forEach((u) => map.set(u.id, u.unitName))
-    unitMap.current = map
-  }, [units])
 
   // Clear feedback toast after 4s
   useEffect(() => {
@@ -120,99 +612,114 @@ export const LiveActiveSessionView: React.FC<LiveActiveSessionViewProps> = ({
   }, [feedbackToast])
 
   // Authoritative data fetcher
-  const fetchAuthoritativeData = useCallback(async (silent = false) => {
-    if (!silent) {
-      setIsRefreshing(true)
-      setStatusState('refreshing')
-    }
-    setErrorMessage(null)
+  const fetchAuthoritativeData = useCallback(
+    async (silent = false) => {
+      const seq = ++requestSeqRef.current
 
-    try {
-      // 1. Fetch Member Attendance Records for this session
-      let attQuery = supabase
-        .from('attendance_records')
-        .select('id, session_id, member_id, attendee_name, is_non_member, recorded_unit_id, selected_class, check_in_time, is_manual, members(id, full_name, home_unit_id)')
-        .eq('session_id', session.id)
-
-      if (authorizedUnitIds && authorizedUnitIds.length > 0) {
-        attQuery = attQuery.in('recorded_unit_id', authorizedUnitIds)
+      if (!silent) {
+        setIsRefreshing(true)
+        setStatusState('refreshing')
       }
 
-      // 2. Fetch Visitor Records for this session
-      let visQuery = supabase
-        .from('session_visitors')
-        .select('id, session_id, full_name, is_church_member, inviting_unit_id, selected_class, created_at, recorded_by_terminal_id')
-        .eq('session_id', session.id)
-
-      if (authorizedUnitIds && authorizedUnitIds.length > 0) {
-        visQuery = visQuery.in('inviting_unit_id', authorizedUnitIds)
+      // If unit-scoped user has 0 assigned units, return empty authoritative snapshot immediately
+      if (Array.isArray(authorizedUnitIds) && authorizedUnitIds.length === 0) {
+        if (seq === requestSeqRef.current) {
+          setRawMemberRows([])
+          setRawVisitorRows([])
+          setHasLoadedOnce(true)
+          setLastUpdated(new Date().toISOString())
+          setErrorMessage(null)
+          setIsLoading(false)
+          setIsRefreshing(false)
+          setStatusState('live')
+        }
+        return
       }
 
-      const [attRes, visRes] = await Promise.all([attQuery, visQuery])
+      try {
+        // 1. Fetch Member Attendance Records for this session using ONLY actual schema columns
+        let attQuery = supabase
+          .from('attendance_records')
+          .select(
+            'id, session_id, member_id, recorded_unit_id, recorded_by_terminal_id, selected_class, check_in_time, created_at, members(id, full_name, preferred_name, member_number, home_unit_id)'
+          )
+          .eq('session_id', session.id)
 
-      if (attRes.error) throw attRes.error
-      if (visRes.error) throw visRes.error
+        if (Array.isArray(authorizedUnitIds) && authorizedUnitIds.length > 0) {
+          attQuery = attQuery.in('recorded_unit_id', authorizedUnitIds)
+        }
 
-      const rawAtt = attRes.data || []
-      const rawVis = visRes.data || []
+        // 2. Fetch Visitor Records for this session
+        let visQuery = supabase
+          .from('session_visitors')
+          .select(
+            'id, session_id, full_name, contact_phone, is_church_member, inviting_unit_id, selected_class, created_at, recorded_by_terminal_id'
+          )
+          .eq('session_id', session.id)
 
-      // Map member records
-      const mappedMembers: AttendanceRecord[] = rawAtt.map((r: any) => ({
-        id: r.id,
-        sessionId: r.session_id,
-        memberId: r.member_id,
-        attendeeName: r.members?.full_name || r.attendee_name || 'Member',
-        isNonMember: false,
-        unitId: r.recorded_unit_id,
-        unitName: unitMap.current.get(r.recorded_unit_id) || 'Unit',
-        selectedClass: r.selected_class || null,
-        checkInTime: r.check_in_time,
-        isManual: !!r.is_manual
-      }))
+        if (Array.isArray(authorizedUnitIds) && authorizedUnitIds.length > 0) {
+          visQuery = visQuery.in('inviting_unit_id', authorizedUnitIds)
+        }
 
-      setMemberRecords(mappedMembers)
-      setVisitorRecords(rawVis)
+        const [attRes, visRes] = await Promise.all([attQuery, visQuery])
 
-      // Build unified recent items (sorted by time descending)
-      const recentList: RecentCheckInItem[] = []
+        if (attRes.error) throw attRes.error
+        if (visRes.error) throw visRes.error
 
-      for (const m of mappedMembers) {
-        recentList.push({
-          id: m.id,
-          attendeeName: m.attendeeName,
-          attendeeType: 'member',
-          unitName: m.unitName || 'Unit',
-          selectedClass: m.selectedClass || null,
-          checkInTime: m.checkInTime,
-          isManual: !!m.isManual
-        })
+        const rawAtt = attRes.data || []
+        const rawVis = visRes.data || []
+
+        // If any member attendance row is missing embedded member full_name, resolve from public.members
+        const missingMemberIds = Array.from(
+          new Set(
+            rawAtt
+              .filter((r: any) => r?.member_id && !r?.members?.full_name && !r?.attendee_name)
+              .map((r: any) => String(r.member_id))
+          )
+        )
+
+        const nextDirectoryMap = new Map<string, { fullName: string; homeUnitId?: string | null }>()
+        if (missingMemberIds.length > 0) {
+          const memQuery = supabase
+            .from('members')
+            .select('id, full_name, home_unit_id')
+            .in('id', missingMemberIds)
+          if (memQuery && typeof memQuery.then === 'function') {
+            const { data: rawMembers } = await memQuery
+            for (const m of rawMembers || []) {
+              if (m?.id) {
+                nextDirectoryMap.set(String(m.id), {
+                  fullName: m.full_name || 'Member',
+                  homeUnitId: m.home_unit_id || null
+                })
+              }
+            }
+          }
+        }
+
+        // Ignore stale out-of-order response
+        if (seq !== requestSeqRef.current) return
+
+        setMemberDirectoryMap(nextDirectoryMap)
+        setRawMemberRows(rawAtt)
+        setRawVisitorRows(rawVis)
+        setHasLoadedOnce(true)
+        setErrorMessage(null)
+        setLastUpdated(new Date().toISOString())
+        setStatusState('live')
+      } catch (err: unknown) {
+        if (seq !== requestSeqRef.current) return
+        setStatusState('stale')
+        setErrorMessage(humanizeErrorMessage(err, 'Could not refresh live attendance records.'))
+      } finally {
+        if (seq === requestSeqRef.current) {
+          setIsLoading(false)
+          setIsRefreshing(false)
+        }
       }
-
-      for (const v of rawVis) {
-        recentList.push({
-          id: v.id,
-          attendeeName: v.full_name || 'Visitor',
-          attendeeType: 'visitor',
-          unitName: (v.inviting_unit_id && unitMap.current.get(v.inviting_unit_id)) || 'Guest',
-          selectedClass: v.selected_class || null,
-          checkInTime: v.created_at,
-          isManual: false
-        })
-      }
-
-      recentList.sort((a, b) => new Date(b.checkInTime).getTime() - new Date(a.checkInTime).getTime())
-      setRecentItems(recentList)
-
-      setLastUpdated(new Date().toISOString())
-      setStatusState('live')
-    } catch (err: unknown) {
-      setStatusState('stale')
-      setErrorMessage(humanizeErrorMessage(err, 'Could not refresh live attendance records.'))
-    } finally {
-      setIsLoading(false)
-      setIsRefreshing(false)
-    }
-  }, [session.id, authorizedUnitIds])
+    },
+    [session.id, authorizedUnitIds]
+  )
 
   // Setup Realtime & Bounded Polling
   useEffect(() => {
@@ -249,8 +756,10 @@ export const LiveActiveSessionView: React.FC<LiveActiveSessionViewProps> = ({
       .subscribe((status) => {
         if (!mounted) return
         if (status === 'SUBSCRIBED') {
-          setStatusState('live')
-        } else if (status === 'TIMED_OUT' || status === 'CHANNEL_ERROR') {
+          setRealtimeSubscribed(true)
+          setStatusState((prev) => (prev === 'stale' ? 'live' : prev))
+        } else if (status === 'TIMED_OUT' || status === 'CHANNEL_ERROR' || status === 'CLOSED') {
+          setRealtimeSubscribed(false)
           setStatusState('stale')
         }
       })
@@ -259,7 +768,7 @@ export const LiveActiveSessionView: React.FC<LiveActiveSessionViewProps> = ({
     const pollingInterval = setInterval(() => {
       if (!mounted) return
       if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
-        return // pause polling while backgrounded
+        return
       }
       fetchAuthoritativeData(true)
     }, 10000)
@@ -279,136 +788,53 @@ export const LiveActiveSessionView: React.FC<LiveActiveSessionViewProps> = ({
     }
   }, [session.id, fetchAuthoritativeData])
 
-  // Filter member and visitor records by selectedClassFilter when active
-  const filteredMemberRecords = useMemo(() => {
-    if (selectedClassFilter === 'all') return memberRecords
-    if (selectedClassFilter === '__unassigned__') {
-      return memberRecords.filter((m) => !m.selectedClass || !m.selectedClass.trim())
-    }
-    const target = selectedClassFilter.toLowerCase()
-    return memberRecords.filter((m) => (m.selectedClass || '').trim().toLowerCase() === target)
-  }, [memberRecords, selectedClassFilter])
+  // Compute reconciled live session metrics from authoritative records
+  const snapshot = useMemo(
+    () =>
+      computeLiveSessionMetrics({
+        sessionId: session.id,
+        sessionStatus: session.status,
+        rawMemberRows,
+        rawVisitorRows,
+        units,
+        participatingUnits: session.participatingUnits,
+        authorizedUnitIds,
+        configuredClasses,
+        isSkillAcquisition,
+        selectedClassFilter,
+        memberDirectoryMap
+      }),
+    [
+      session.id,
+      session.status,
+      rawMemberRows,
+      rawVisitorRows,
+      units,
+      session.participatingUnits,
+      authorizedUnitIds,
+      configuredClasses,
+      isSkillAcquisition,
+      selectedClassFilter,
+      memberDirectoryMap
+    ]
+  )
 
-  const filteredVisitorRecords = useMemo(() => {
-    if (selectedClassFilter === 'all') return visitorRecords
-    if (selectedClassFilter === '__unassigned__') {
-      return visitorRecords.filter((v) => !v.selected_class || !String(v.selected_class).trim())
-    }
-    const target = selectedClassFilter.toLowerCase()
-    return visitorRecords.filter((v) => String(v.selected_class || '').trim().toLowerCase() === target)
-  }, [visitorRecords, selectedClassFilter])
-
-  const filteredRecentItems = useMemo(() => {
-    if (selectedClassFilter === 'all') return recentItems.slice(0, 20)
-    if (selectedClassFilter === '__unassigned__') {
-      return recentItems.filter((r) => !r.selectedClass || !r.selectedClass.trim()).slice(0, 20)
-    }
-    const target = selectedClassFilter.toLowerCase()
-    return recentItems.filter((r) => (r.selectedClass || '').trim().toLowerCase() === target).slice(0, 20)
-  }, [recentItems, selectedClassFilter])
-
-  // Aggregate Metrics (using stable database IDs)
-  const totalValidCheckIns = filteredMemberRecords.length + filteredVisitorRecords.length
-
-  // Distinct attendees using stable identity (member_id for members, id for visitors)
-  const distinctMemberIds = new Set(filteredMemberRecords.map((m) => m.memberId || m.id))
-  const distinctVisitorIds = new Set(filteredVisitorRecords.map((v) => v.id))
-  const distinctAttendeesCount = distinctMemberIds.size + distinctVisitorIds.size
-
-  const memberCount = filteredMemberRecords.length
-  const visitorCount = filteredVisitorRecords.length
-
-  // Participating unit breakdown
-  const unitBreakdown: { unitId: string; unitName: string; members: number; visitors: number; total: number }[] = []
-  const participatingUnitIds = session.participatingUnits && session.participatingUnits.length > 0
-    ? session.participatingUnits
-    : units.map((u) => u.id)
-
-  for (const uid of participatingUnitIds) {
-    // If user is restricted to certain units, only show permitted units
-    if (authorizedUnitIds && !authorizedUnitIds.includes(uid)) {
-      continue
-    }
-    const uName = unitMap.current.get(uid) || 'Unit'
-    const mCount = filteredMemberRecords.filter((m) => m.unitId === uid).length
-    const vCount = filteredVisitorRecords.filter((v) => v.inviting_unit_id === uid).length
-    unitBreakdown.push({
-      unitId: uid,
-      unitName: uName,
-      members: mCount,
-      visitors: vCount,
-      total: mCount + vCount
-    })
-  }
-
-  // Skill Acquisition Class Breakdown (reconciles 100% with overall attendance)
-  const classBreakdown = useMemo(() => {
-    const map = new Map<string, { className: string; members: number; visitors: number; total: number; isConfigured: boolean }>()
-    for (const cls of configuredClasses) {
-      map.set(cls.toLowerCase(), {
-        className: cls,
-        members: 0,
-        visitors: 0,
-        total: 0,
-        isConfigured: true
-      })
-    }
-
-    let unassignedMembers = 0
-    let unassignedVisitors = 0
-
-    for (const m of memberRecords) {
-      const raw = m.selectedClass ? m.selectedClass.trim() : ''
-      if (!raw) {
-        unassignedMembers++
-        continue
-      }
-      const key = raw.toLowerCase()
-      const existing = map.get(key) || {
-        className: raw,
-        members: 0,
-        visitors: 0,
-        total: 0,
-        isConfigured: false
-      }
-      existing.members++
-      existing.total++
-      map.set(key, existing)
-    }
-
-    for (const v of visitorRecords) {
-      const raw = v.selected_class ? String(v.selected_class).trim() : ''
-      if (!raw) {
-        unassignedVisitors++
-        continue
-      }
-      const key = raw.toLowerCase()
-      const existing = map.get(key) || {
-        className: raw,
-        members: 0,
-        visitors: 0,
-        total: 0,
-        isConfigured: false
-      }
-      existing.visitors++
-      existing.total++
-      map.set(key, existing)
-    }
-
-    const list = Array.from(map.values())
-    if (unassignedMembers + unassignedVisitors > 0 && (isSkillAcquisition || list.length > 0)) {
-      list.push({
-        className: 'Unassigned / Not Specified',
-        members: unassignedMembers,
-        visitors: unassignedVisitors,
-        total: unassignedMembers + unassignedVisitors,
-        isConfigured: false
-      })
-    }
-    return list
-  }, [configuredClasses, memberRecords, visitorRecords, isSkillAcquisition])
+  const {
+    allMemberRecords,
+    allVisitorRecords,
+    filteredMemberRecords,
+    filteredVisitorRecords,
+    totalValidCheckIns,
+    distinctAttendeesCount,
+    memberCount,
+    visitorCount,
+    unitBreakdown,
+    classBreakdown,
+    filteredRecentItems
+  } = snapshot
 
   const hasAnyClassData = isSkillAcquisition || classBreakdown.some((c) => c.total > 0)
+  const initialLoadFailed = !isLoading && !hasLoadedOnce && Boolean(errorMessage)
 
   // Export Live Session Records (respecting active class filter)
   const handleExportLiveSession = async (format: 'csv' | 'xlsx') => {
@@ -422,11 +848,11 @@ export const LiveActiveSessionView: React.FC<LiveActiveSessionViewProps> = ({
         source: m.isManual ? 'Manual' : 'Terminal'
       })),
       ...filteredVisitorRecords.map((v) => ({
-        attendeeName: v.full_name || 'Visitor',
+        attendeeName: v.fullName || 'Visitor',
         attendeeType: 'Visitor',
-        unitName: (v.inviting_unit_id && unitMap.current.get(v.inviting_unit_id)) || 'Guest',
-        selectedClass: v.selected_class || 'N/A',
-        checkInTime: formatLagosTimestampDisplay(v.created_at),
+        unitName: v.invitingUnitName || 'Unassigned / No Inviting Unit',
+        selectedClass: v.selectedClass || 'N/A',
+        checkInTime: formatLagosTimestampDisplay(v.checkInTime),
         source: 'Terminal'
       }))
     ]
@@ -477,6 +903,12 @@ export const LiveActiveSessionView: React.FC<LiveActiveSessionViewProps> = ({
       type: res.success ? 'success' : 'error',
       text: res.message
     })
+  }
+
+  const renderMetricValue = (val: number) => {
+    if (isLoading) return '...'
+    if (initialLoadFailed) return '—'
+    return val
   }
 
   return (
@@ -531,12 +963,17 @@ export const LiveActiveSessionView: React.FC<LiveActiveSessionViewProps> = ({
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          {/* Status Indicator */}
-          <div className="inline-flex items-center space-x-2 px-3 py-1 rounded-xl bg-slate-100 dark:bg-slate-800 text-xs text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
-            {statusState === 'live' && (
+          {/* Status & Freshness Indicator */}
+          <div
+            className="inline-flex items-center space-x-2 px-3 py-1 rounded-xl bg-slate-100 dark:bg-slate-800 text-xs text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700"
+            data-testid="live-monitor-connection-status"
+          >
+            {statusState === 'live' && !errorMessage && (
               <>
                 <Radio className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 animate-pulse" />
-                <span className="font-medium text-emerald-700 dark:text-emerald-400">Live</span>
+                <span className="font-medium text-emerald-700 dark:text-emerald-400">
+                  {realtimeSubscribed ? 'Live (Realtime + Sync)' : 'Live (Auto-Sync)'}
+                </span>
               </>
             )}
             {statusState === 'refreshing' && (
@@ -545,14 +982,18 @@ export const LiveActiveSessionView: React.FC<LiveActiveSessionViewProps> = ({
                 <span className="font-medium text-blue-600 dark:text-blue-400">Refreshing</span>
               </>
             )}
-            {statusState === 'stale' && (
+            {(statusState === 'stale' || Boolean(errorMessage)) && statusState !== 'refreshing' && (
               <>
                 <AlertCircle className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
-                <span className="font-medium text-amber-600 dark:text-amber-400">Reconnecting</span>
+                <span className="font-medium text-amber-600 dark:text-amber-400">
+                  {hasLoadedOnce ? 'Stale — Reconnecting' : 'Connection Error'}
+                </span>
               </>
             )}
-            <span className="text-[10px] text-slate-400 font-mono hidden md:inline">
-              Updated {formatLagosTimestampDisplay(lastUpdated)}
+            <span className="text-[10px] text-slate-400 font-mono">
+              {lastUpdated
+                ? `Updated ${formatLagosTimestampDisplay(lastUpdated)}`
+                : 'Awaiting initial sync'}
             </span>
           </div>
 
@@ -560,7 +1001,7 @@ export const LiveActiveSessionView: React.FC<LiveActiveSessionViewProps> = ({
           <button
             type="button"
             onClick={() => handleExportLiveSession('csv')}
-            disabled={totalValidCheckIns === 0}
+            disabled={totalValidCheckIns === 0 || initialLoadFailed}
             className="inline-flex items-center space-x-1 px-2.5 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 disabled:opacity-40 text-xs font-semibold text-slate-700 dark:text-slate-200 transition"
             title="Export live attendance to CSV"
           >
@@ -570,7 +1011,7 @@ export const LiveActiveSessionView: React.FC<LiveActiveSessionViewProps> = ({
           <button
             type="button"
             onClick={() => handleExportLiveSession('xlsx')}
-            disabled={totalValidCheckIns === 0}
+            disabled={totalValidCheckIns === 0 || initialLoadFailed}
             className="inline-flex items-center space-x-1 px-2.5 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 disabled:opacity-40 text-xs font-semibold text-slate-700 dark:text-slate-200 transition"
             title="Export live attendance to Excel"
           >
@@ -606,13 +1047,30 @@ export const LiveActiveSessionView: React.FC<LiveActiveSessionViewProps> = ({
 
       {/* Error state if failed to load */}
       {errorMessage && (
-        <div className="p-3.5 rounded-xl bg-amber-50 dark:bg-amber-950/80 border border-amber-200 dark:border-amber-800 text-xs text-amber-800 dark:text-amber-300 flex items-center space-x-2">
-          <AlertCircle className="w-4 h-4 shrink-0" />
-          <span>{errorMessage}</span>
+        <div
+          role="alert"
+          className="p-3.5 rounded-xl bg-amber-50 dark:bg-amber-950/80 border border-amber-200 dark:border-amber-800 text-xs text-amber-800 dark:text-amber-300 flex items-center justify-between gap-3"
+        >
+          <div className="flex items-center space-x-2">
+            <AlertCircle className="w-4 h-4 shrink-0" />
+            <span>
+              {errorMessage}
+              {hasLoadedOnce && lastUpdated
+                ? ` Showing last verified snapshot from ${formatLagosTimestampDisplay(lastUpdated)}.`
+                : ' Attendance figures cannot be displayed until connection is restored.'}
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => fetchAuthoritativeData(false)}
+            className="px-2.5 py-1 rounded-lg bg-amber-200/60 dark:bg-amber-900/70 hover:bg-amber-200 dark:hover:bg-amber-800 text-amber-900 dark:text-amber-200 font-semibold shrink-0"
+          >
+            Retry Now
+          </button>
         </div>
       )}
 
-      {/* Session Code & Link Bar (Requirement 4) */}
+      {/* Session Code & Link Bar */}
       <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div className="flex items-center space-x-3">
           <div className="p-2 bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-400 rounded-lg">
@@ -662,40 +1120,56 @@ export const LiveActiveSessionView: React.FC<LiveActiveSessionViewProps> = ({
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="p-4 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl">
           <span className="text-[11px] text-slate-500 dark:text-slate-400 uppercase font-semibold">Total Valid Check-Ins</span>
-          <div className="text-2xl font-extrabold text-slate-900 dark:text-white mt-1">
-            {isLoading ? '...' : totalValidCheckIns}
+          <div
+            data-testid="live-metric-total-checkins"
+            className="text-2xl font-extrabold text-slate-900 dark:text-white mt-1"
+          >
+            {renderMetricValue(totalValidCheckIns)}
           </div>
           <span className="text-[10px] text-slate-500 dark:text-slate-400">
-            {selectedClassFilter === 'all' ? 'Authoritative records' : `Filtered: ${selectedClassFilter}`}
+            {initialLoadFailed
+              ? 'Failed to load records'
+              : selectedClassFilter === 'all'
+              ? 'Authoritative records'
+              : `Filtered: ${selectedClassFilter}`}
           </span>
         </div>
 
         <div className="p-4 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl">
           <span className="text-[11px] text-slate-500 dark:text-slate-400 uppercase font-semibold">Distinct Attendees</span>
-          <div className="text-2xl font-extrabold text-emerald-700 dark:text-emerald-400 mt-1">
-            {isLoading ? '...' : distinctAttendeesCount}
+          <div
+            data-testid="live-metric-distinct-attendees"
+            className="text-2xl font-extrabold text-emerald-700 dark:text-emerald-400 mt-1"
+          >
+            {renderMetricValue(distinctAttendeesCount)}
           </div>
           <span className="text-[10px] text-slate-500 dark:text-slate-400">Deduplicated identity</span>
         </div>
 
         <div className="p-4 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl">
           <span className="text-[11px] text-slate-500 dark:text-slate-400 uppercase font-semibold">Church Members</span>
-          <div className="text-2xl font-extrabold text-blue-700 dark:text-blue-400 mt-1">
-            {isLoading ? '...' : memberCount}
+          <div
+            data-testid="live-metric-members"
+            className="text-2xl font-extrabold text-blue-700 dark:text-blue-400 mt-1"
+          >
+            {renderMetricValue(memberCount)}
           </div>
           <span className="text-[10px] text-slate-500 dark:text-slate-400">Census-verified</span>
         </div>
 
         <div className="p-4 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl">
           <span className="text-[11px] text-slate-500 dark:text-slate-400 uppercase font-semibold">Visitors & Guests</span>
-          <div className="text-2xl font-extrabold text-purple-700 dark:text-purple-400 mt-1">
-            {isLoading ? '...' : visitorCount}
+          <div
+            data-testid="live-metric-visitors"
+            className="text-2xl font-extrabold text-purple-700 dark:text-purple-400 mt-1"
+          >
+            {renderMetricValue(visitorCount)}
           </div>
           <span className="text-[10px] text-slate-500 dark:text-slate-400">Invited guests</span>
         </div>
       </div>
 
-      {/* Live Attendance by Skill Acquisition Class (Requirements E & F) */}
+      {/* Live Attendance by Skill Acquisition Class */}
       {hasAnyClassData && (
         <div className="space-y-3">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
@@ -717,7 +1191,9 @@ export const LiveActiveSessionView: React.FC<LiveActiveSessionViewProps> = ({
                 onChange={(e) => setSelectedClassFilter(e.target.value)}
                 className="px-2.5 py-1 bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-xs text-slate-800 dark:text-slate-200"
               >
-                <option value="all">All Classes ({memberRecords.length + visitorRecords.length})</option>
+                <option value="all">
+                  All Classes ({allMemberRecords.length + allVisitorRecords.length})
+                </option>
                 {classBreakdown.map((c) => {
                   const val = c.className === 'Unassigned / Not Specified' ? '__unassigned__' : c.className
                   return (
@@ -772,10 +1248,10 @@ export const LiveActiveSessionView: React.FC<LiveActiveSessionViewProps> = ({
               <tfoot className="bg-slate-100/80 dark:bg-slate-900/80 border-t border-slate-200 dark:border-slate-800 font-bold text-slate-900 dark:text-white">
                 <tr>
                   <td className="px-4 py-2">Reconciled Session Total</td>
-                  <td className="px-4 py-2 text-center">{memberRecords.length}</td>
-                  <td className="px-4 py-2 text-center">{visitorRecords.length}</td>
+                  <td className="px-4 py-2 text-center">{allMemberRecords.length}</td>
+                  <td className="px-4 py-2 text-center">{allVisitorRecords.length}</td>
                   <td className="px-4 py-2 text-right text-emerald-700 dark:text-emerald-400">
-                    {memberRecords.length + visitorRecords.length}
+                    {allMemberRecords.length + allVisitorRecords.length}
                   </td>
                 </tr>
               </tfoot>
@@ -808,13 +1284,22 @@ export const LiveActiveSessionView: React.FC<LiveActiveSessionViewProps> = ({
                 {unitBreakdown.length === 0 ? (
                   <tr>
                     <td colSpan={4} className="px-4 py-6 text-center text-slate-500 italic">
-                      No participating units registered for this session.
+                      {initialLoadFailed
+                        ? 'Unable to load unit breakdown.'
+                        : 'No participating units registered for this session.'}
                     </td>
                   </tr>
                 ) : (
                   unitBreakdown.map((u) => (
                     <tr key={u.unitId} className="hover:bg-slate-100/50 dark:hover:bg-slate-900/50">
-                      <td className="px-4 py-2.5 font-medium text-slate-900 dark:text-slate-200">{u.unitName}</td>
+                      <td className="px-4 py-2.5 font-medium text-slate-900 dark:text-slate-200">
+                        <span>{u.unitName}</span>
+                        {u.isUnassigned && (
+                          <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-400">
+                            No Unit Specified
+                          </span>
+                        )}
+                      </td>
                       <td className="px-4 py-2.5 text-center text-slate-700 dark:text-slate-300">{u.members}</td>
                       <td className="px-4 py-2.5 text-center text-slate-700 dark:text-slate-300">{u.visitors}</td>
                       <td className="px-4 py-2.5 text-right font-bold text-emerald-700 dark:text-emerald-400">{u.total}</td>
@@ -822,6 +1307,18 @@ export const LiveActiveSessionView: React.FC<LiveActiveSessionViewProps> = ({
                   ))
                 )}
               </tbody>
+              {unitBreakdown.length > 0 && !initialLoadFailed && (
+                <tfoot className="bg-slate-100/80 dark:bg-slate-900/80 border-t border-slate-200 dark:border-slate-800 font-bold text-slate-900 dark:text-white">
+                  <tr>
+                    <td className="px-4 py-2">Reconciled Unit Total</td>
+                    <td className="px-4 py-2 text-center">{memberCount}</td>
+                    <td className="px-4 py-2 text-center">{visitorCount}</td>
+                    <td className="px-4 py-2 text-right text-emerald-700 dark:text-emerald-400">
+                      {totalValidCheckIns}
+                    </td>
+                  </tr>
+                </tfoot>
+              )}
             </table>
           </div>
         </div>
@@ -832,7 +1329,7 @@ export const LiveActiveSessionView: React.FC<LiveActiveSessionViewProps> = ({
             <div className="flex items-center space-x-2">
               <Clock className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
               <h3 className="text-xs font-bold text-slate-900 dark:text-white uppercase tracking-wider">
-                Recent Check-Ins ({filteredRecentItems.length})
+                Recent Check-Ins ({initialLoadFailed ? '—' : filteredRecentItems.length})
               </h3>
             </div>
             <span className="text-[10px] text-slate-500 dark:text-slate-400">Realtime stream</span>
@@ -841,13 +1338,17 @@ export const LiveActiveSessionView: React.FC<LiveActiveSessionViewProps> = ({
           <div className="bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden max-h-[300px] overflow-y-auto">
             {filteredRecentItems.length === 0 ? (
               <div className="p-8 text-center text-slate-500 italic text-xs">
-                {isLoading ? 'Loading check-ins...' : 'No attendees checked in yet for this session.'}
+                {isLoading
+                  ? 'Loading check-ins...'
+                  : initialLoadFailed
+                  ? 'Unable to load attendance records. Please check your connection and retry.'
+                  : 'No attendees checked in yet for this session.'}
               </div>
             ) : (
               <div className="divide-y divide-slate-200 dark:divide-slate-800">
                 {filteredRecentItems.map((item) => (
                   <div
-                    key={item.id}
+                    key={`${item.attendeeType}-${item.id}`}
                     className="px-4 py-2.5 flex items-center justify-between hover:bg-slate-100/60 dark:hover:bg-slate-900/50 text-xs"
                   >
                     <div className="min-w-0 pr-2">

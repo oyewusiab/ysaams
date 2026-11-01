@@ -20,12 +20,24 @@ import {
 } from 'lucide-react'
 import { useAuth } from '../../context/AuthContext'
 import { useTheme } from '../../context/ThemeContext'
-import { LeadershipRoute } from '../../types/database'
+import { AppRole, LeadershipRoute } from '../../types/database'
 
 export interface RoleNavAccess {
   isStakeLeader: boolean
   canRecordManualAttendance: boolean
 }
+
+/**
+ * Roles explicitly excluded from Authorized Leader Check-In navigation,
+ * direct route access (/la/attendance), and manual attendance mutations.
+ */
+export const RESTRICTED_MANUAL_CHECKIN_ROLES: readonly AppRole[] = [
+  'bishop',
+  'branch_president',
+  'ward_clerk',
+  'branch_clerk',
+  'stake_clerk'
+]
 
 export function getRolePermittedNavItems(
   access: RoleNavAccess
@@ -35,7 +47,9 @@ export function getRolePermittedNavItems(
     { id: 'activities', label: 'Activities & Sessions', icon: Calendar }
   ]
 
-  // Authorized manual attendance check-in is relevant to presiding leaders, hidden for read-only clerks
+  // Authorized manual attendance check-in is only visible to roles with manual attendance permission
+  // (system_admin, stake_presidency, and unit-assigned ysa_leader).
+  // Removed for bishop, branch_president, ward_clerk, branch_clerk, and stake_clerk.
   if (access.canRecordManualAttendance) {
     items.push({ id: 'attendance', label: 'Authorized Check-in', icon: ClipboardCheck })
   }
@@ -57,6 +71,15 @@ export function getRolePermittedNavItems(
   items.push({ id: 'settings', label: 'Settings', icon: Settings })
 
   return items
+}
+
+export function isLeadershipRoutePermitted(
+  subpath: LeadershipRoute,
+  access: RoleNavAccess
+): boolean {
+  if (subpath === 'not-found') return true
+  const permittedItems = getRolePermittedNavItems(access)
+  return permittedItems.some((item) => item.id === subpath)
 }
 
 interface LeadershipSidebarProps {

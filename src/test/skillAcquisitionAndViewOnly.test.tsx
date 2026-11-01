@@ -569,6 +569,7 @@ describe('YSA AMS — Skill Acquisition Multi-Class Attendance & View-Only Leade
       expect(sql).toContain('ADD COLUMN IF NOT EXISTS selected_class TEXT DEFAULT NULL')
 
       // 2. Class validation helper & RPC
+      expect(sql).toContain('CREATE OR REPLACE FUNCTION public.has_role')
       expect(sql).toContain('CREATE OR REPLACE FUNCTION public.validate_and_resolve_session_class')
       expect(sql).toContain('CREATE OR REPLACE FUNCTION public.update_activity_classes')
       expect(sql).toContain("'UPDATE_ACTIVITY_CLASSES'")
@@ -583,6 +584,49 @@ describe('YSA AMS — Skill Acquisition Multi-Class Attendance & View-Only Leade
       expect(sql).toContain(
         'Unauthorized: Your role has view-only access or is not authorized to record manual attendance for this unit.'
       )
+    })
+
+    it('gracefully updates activity classes when the remote DB still has the legacy has_role error', async () => {
+      mockRpc.mockResolvedValueOnce({
+        data: null,
+        error: { message: 'function public.has_role(uuid, unknown) does not exist' }
+      })
+
+      const sessionUpdateIn = vi.fn().mockResolvedValue({ data: [], error: null })
+      mockFrom.mockImplementation((table: string) => {
+        if (table === 'activities') {
+          return {
+            update: (payload: Record<string, unknown>) => ({
+              eq: () => ({
+                select: async () => ({
+                  data: [{ id: 'act-gp-1', class_options: payload.class_options }],
+                  error: null
+                })
+              })
+            })
+          }
+        }
+        if (table === 'activity_sessions') {
+          return {
+            update: () => ({
+              eq: () => ({
+                in: sessionUpdateIn
+              })
+            })
+          }
+        }
+        return {}
+      })
+
+      const res = await activityService.updateActivityClasses(
+        'act-gp-1',
+        ['Barbing', 'Tailoring', 'ICT'],
+        'Configure classes for Gathering Place'
+      )
+
+      expect(res.success).toBe(true)
+      expect(res.classOptions).toEqual(['Barbing', 'Tailoring', 'ICT'])
+      expect(sessionUpdateIn).toHaveBeenCalledWith('status', ['draft', 'active'])
     })
   })
 })

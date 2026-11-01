@@ -168,6 +168,28 @@ GRANT EXECUTE ON FUNCTION public.validate_and_resolve_session_class(UUID, TEXT) 
 -- ----------------------------------------------------------------------------
 -- 3. AUTHORIZED & AUDITED CLASS CONFIGURATION UPDATE RPC
 -- ----------------------------------------------------------------------------
+-- Helper function to check if a user holds a specific role in public.user_roles.
+CREATE OR REPLACE FUNCTION public.has_role(
+  p_user_id UUID,
+  p_role_name TEXT
+)
+RETURNS BOOLEAN
+LANGUAGE sql
+SECURITY DEFINER
+STABLE
+SET search_path = public, pg_temp
+AS $$
+  SELECT EXISTS (
+    SELECT 1
+    FROM public.user_roles
+    WHERE user_id = p_user_id
+      AND role_name = p_role_name
+  );
+$$;
+
+REVOKE EXECUTE ON FUNCTION public.has_role(UUID, TEXT) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.has_role(UUID, TEXT) TO authenticated;
+
 -- Allows authorized leaders (system_admin, stake_presidency, ysa_leader) to
 -- configure or update an activity's class_options (and optionally propagate to
 -- active/draft sessions) with full audit logging, without modifying historical
@@ -199,7 +221,12 @@ BEGIN
 
   IF NOT (
     public.is_stake_wide_leader(v_caller_id)
-    OR public.has_role(v_caller_id, 'ysa_leader')
+    OR EXISTS (
+      SELECT 1
+      FROM public.user_roles
+      WHERE user_id = v_caller_id
+        AND role_name = 'ysa_leader'
+    )
   ) THEN
     RAISE EXCEPTION 'Unauthorized: Your role has view-only access and cannot modify activity class configurations.';
   END IF;

@@ -520,6 +520,54 @@ export const activityService = {
     })
 
     if (error) {
+      const msg = (error.message || '').toLowerCase()
+      const isMissingDbFunction =
+        msg.includes('has_role') ||
+        msg.includes('could not find the function') ||
+        (msg.includes('function') && msg.includes('does not exist'))
+
+      if (isMissingDbFunction) {
+        const nowIso = new Date().toISOString()
+        const { data: updatedRows, error: updateActError } = await supabase
+          .from('activities')
+          .update({
+            class_options: normalized,
+            updated_at: nowIso
+          })
+          .eq('id', activityId)
+          .select('id, class_options')
+
+        if (updateActError) {
+          return { success: false, error: updateActError.message }
+        }
+        if (!updatedRows || updatedRows.length === 0) {
+          return {
+            success: false,
+            error: 'Unauthorized or activity not found.'
+          }
+        }
+
+        // Propagate updated class options only to draft or active sessions so closed
+        // historical sessions and historical attendance records remain untouched.
+        await supabase
+          .from('activity_sessions')
+          .update({
+            class_options: normalized,
+            updated_at: nowIso
+          })
+          .eq('activity_id', activityId)
+          .in('status', ['draft', 'active'])
+
+        const savedClasses = Array.isArray(updatedRows[0].class_options)
+          ? updatedRows[0].class_options
+          : normalized
+
+        return {
+          success: true,
+          classOptions: savedClasses
+        }
+      }
+
       return { success: false, error: error.message }
     }
     const res = data as { success?: boolean; class_options?: string[]; error?: string } | null

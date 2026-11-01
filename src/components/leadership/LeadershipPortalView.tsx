@@ -1,14 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react'
 import {
-  LayoutDashboard,
-  Calendar,
-  ClipboardCheck,
-  Users,
-  BarChart3,
-  Building2,
-  UserCog,
-  FileText,
-  Settings,
   Lock,
   ArrowRight,
   ShieldAlert,
@@ -40,7 +31,11 @@ import {
 } from '../../types/database'
 import { authService } from '../../services/authService'
 import { adminService } from '../../services/adminService'
-import { memberService } from '../../services/memberService'
+import {
+  memberService,
+  validateMembersCsv,
+  MemberCsvImportResult
+} from '../../services/memberService'
 import {
   activityService,
   parseActivitiesCsv,
@@ -55,6 +50,12 @@ import { reportService } from '../../services/reportService'
 import { ReportingWorkspace } from '../reporting/ReportingWorkspace'
 import { LiveActiveSessionView } from '../reporting/LiveActiveSessionView'
 import {
+  getRolePermittedNavItems,
+  isLeadershipRoutePermitted,
+  RESTRICTED_MANUAL_CHECKIN_ROLES,
+  RoleNavAccess
+} from '../layout/LeadershipSidebar'
+import {
   copyActivityCode,
   copyAttendanceLink,
   saveActiveSessionCode,
@@ -64,46 +65,16 @@ import {
 } from '../../lib/clipboardUtils'
 import { humanizeErrorMessage } from '../../lib/errorUtils'
 
+export {
+  getRolePermittedNavItems,
+  isLeadershipRoutePermitted,
+  RESTRICTED_MANUAL_CHECKIN_ROLES
+}
+export type { RoleNavAccess }
+
 interface LeadershipPortalViewProps {
   currentSubpath: LeadershipRoute
   onNavigateSubpath: (subpath: LeadershipRoute) => void
-}
-
-export interface RoleNavAccess {
-  isStakeLeader: boolean
-  canRecordManualAttendance: boolean
-}
-
-export function getRolePermittedNavItems(
-  access: RoleNavAccess
-): { id: LeadershipRoute; label: string; icon: React.FC<{ className?: string }> }[] {
-  const items: { id: LeadershipRoute; label: string; icon: React.FC<{ className?: string }> }[] = [
-    { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
-    { id: 'activities', label: 'Activities & Sessions', icon: Calendar }
-  ]
-
-  // Authorized manual attendance check-in is only visible to roles with manual attendance permission (system_admin, stake_presidency, ysa_leader)
-  if (access.canRecordManualAttendance) {
-    items.push({ id: 'attendance', label: 'Authorized Check-in', icon: ClipboardCheck })
-  }
-
-  items.push(
-    { id: 'members', label: 'Member Census', icon: Users },
-    { id: 'reports', label: 'Reports & Export', icon: BarChart3 },
-    { id: 'units', label: 'Stake Units', icon: Building2 }
-  )
-
-  // Governance and audit logs are strictly restricted to stake presidency and system admin
-  if (access.isStakeLeader) {
-    items.push(
-      { id: 'users', label: 'User Governance', icon: UserCog },
-      { id: 'audit-logs', label: 'Audit Trail', icon: FileText }
-    )
-  }
-
-  items.push({ id: 'settings', label: 'Settings', icon: Settings })
-
-  return items
 }
 
 export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
@@ -206,6 +177,12 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
   const [isImportingActivities, setIsImportingActivities] = useState(false)
   const [_activityImportResult, setActivityImportResult] = useState<ActivityImportResult | null>(null)
 
+  // Member CSV Import State
+  const [showMemberCsvModal, setShowMemberCsvModal] = useState(false)
+  const [memberCsvText, setMemberCsvText] = useState('')
+  const [isImportingMembers, setIsImportingMembers] = useState(false)
+  const [memberImportResult, setMemberImportResult] = useState<MemberCsvImportResult | null>(null)
+
   // 6. Session Creation Form
   const [newSessActivityId, setNewSessActivityId] = useState('')
   const [newSessTitle, setNewSessTitle] = useState('')
@@ -233,6 +210,16 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
     if (!activityCsvText.trim()) return null
     return parseActivitiesCsv(activityCsvText)
   }, [activityCsvText])
+
+  // Pre-import validation preview for Member CSV
+  const memberCsvValidation = useMemo(() => {
+    if (!memberCsvText.trim()) return null
+    return validateMembersCsv(memberCsvText, {
+      units,
+      existingMembers: members,
+      allowedUnitIds: isStakeLeader ? null : manageableUnitIds
+    })
+  }, [memberCsvText, units, members, isStakeLeader, manageableUnitIds])
 
   // 7. Initiate, Reopen, Cancel, Postpone & Adjust Session State
   const [activeSessionCodes, setActiveSessionCodes] = useState<Record<string, string>>(() => getAllActiveSessionCodes())
@@ -310,6 +297,9 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
         syncActiveSessionCodes(sList.filter(s => s.status === 'active').map(s => s.id))
         setActiveSessionCodes(getAllActiveSessionCodes())
       } else if (currentSubpath === 'attendance') {
+        if (!canRecordManualAttendance) {
+          return
+        }
         const [aList, sList, mList] = await Promise.all([
           activityService.listActivities(),
           activityService.listSessions(),
@@ -647,11 +637,6 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
     )
   }
 
-  const navItems = getRolePermittedNavItems({
-    isStakeLeader,
-    canRecordManualAttendance
-  })
-
   // Filtered members for Member Census search & filter
   const filteredMembersList = members.filter((m) => {
     if (memberStatusFilter === 'active' && !m.isActive) return false
@@ -887,6 +872,55 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
       setStatusMsg({ type: 'error', text: err?.message || 'Failed to import activities from CSV.' })
     } finally {
       setIsImportingActivities(false)
+    }
+  }
+
+  const handleMemberCsvFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = (event) => {
+      const text = event.target?.result as string
+      setMemberCsvText(text || '')
+      setMemberImportResult(null)
+    }
+    reader.readAsText(file)
+  }
+
+  const handleExecuteMemberCsvImport = async () => {
+    if (!canManageMembers || !memberCsvText.trim() || isImportingMembers) return
+    setIsImportingMembers(true)
+    setMemberImportResult(null)
+    try {
+      const res = await memberService.importMembersFromCsv(memberCsvText, {
+        units,
+        existingMembers: members,
+        allowedUnitIds: isStakeLeader ? null : manageableUnitIds
+      })
+      setMemberImportResult(res)
+      if (res.success) {
+        setStatusMsg({
+          type: 'success',
+          text: `Successfully imported ${res.insertedCount} member record(s) into census${
+            res.validation.summary.genderNormalizedCount > 0
+              ? ` (${res.validation.summary.genderNormalizedCount} gender value(s) normalized to canonical 'male'/'female')`
+              : ''
+          }.`
+        })
+        await loadCurrentSubpathData()
+        setShowMemberCsvModal(false)
+        setMemberCsvText('')
+        setMemberImportResult(null)
+      } else {
+        setStatusMsg({
+          type: 'error',
+          text: res.error || 'Member CSV import failed pre-import validation.'
+        })
+      }
+    } catch (err: any) {
+      setStatusMsg({ type: 'error', text: err?.message || 'Failed to import members from CSV.' })
+    } finally {
+      setIsImportingMembers(false)
     }
   }
 
@@ -1133,8 +1167,10 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
     }
   }
 
-  const isSubpathPermitted =
-    currentSubpath === 'not-found' || navItems.some((item) => item.id === currentSubpath)
+  const isSubpathPermitted = isLeadershipRoutePermitted(currentSubpath, {
+    isStakeLeader,
+    canRecordManualAttendance
+  })
 
   if (!isSubpathPermitted) {
     return (
@@ -2885,7 +2921,20 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
           <div className="space-y-6">
             {canManageMembers ? (
               <form onSubmit={handleCreateMember} className="bg-slate-950 border border-slate-800 p-4 rounded-xl space-y-3">
-                <h3 className="text-xs font-bold text-white uppercase tracking-wider">Register New Member in Census</h3>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <h3 className="text-xs font-bold text-white uppercase tracking-wider">Register New Member in Census</h3>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowMemberCsvModal(true)
+                      setMemberImportResult(null)
+                    }}
+                    className="inline-flex items-center space-x-1.5 px-3 py-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-700 text-emerald-400 rounded-lg text-xs font-semibold transition"
+                  >
+                    <Upload className="w-3.5 h-3.5" />
+                    <span>Import Members CSV</span>
+                  </button>
+                </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
                   <div>
                     <label className="block text-[11px] text-slate-300 uppercase mb-1">Full Name *</label>
@@ -3107,6 +3156,324 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
                 </tbody>
               </table>
             </div>
+
+            {/* Member CSV Import Modal */}
+            {showMemberCsvModal && canManageMembers && (
+              <div
+                className="fixed inset-0 z-50 bg-black/75 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="member-csv-modal-title"
+              >
+                <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 max-w-4xl w-full shadow-2xl animate-terminal-enter my-8 max-h-[90vh] overflow-y-auto">
+                  <div className="flex items-center justify-between pb-4 mb-4 border-b border-slate-800">
+                    <div className="flex items-center space-x-3">
+                      <div className="p-2 bg-emerald-950/80 border border-emerald-500/30 text-emerald-400 rounded-xl">
+                        <FileSpreadsheet className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <h3 id="member-csv-modal-title" className="text-sm font-bold text-white">
+                          Import Members from CSV (Validated &amp; Atomic)
+                        </h3>
+                        <p className="text-[11px] text-slate-400">
+                          Normalizes gender values (<code className="text-emerald-400">M</code>/<code className="text-emerald-400">Male</code> &rarr; <code className="text-emerald-400">male</code>, <code className="text-emerald-400">F</code>/<code className="text-emerald-400">Female</code> &rarr; <code className="text-emerald-400">female</code>) and validates the entire file before insertion.
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowMemberCsvModal(false)
+                        setMemberCsvText('')
+                        setMemberImportResult(null)
+                      }}
+                      className="text-slate-400 hover:text-white p-1 rounded-lg"
+                      aria-label="Close member CSV import dialog"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+
+                  <div className="space-y-4">
+                    <div className="flex flex-wrap items-center justify-between gap-3 bg-slate-950 border border-slate-800 p-3 rounded-xl">
+                      <div>
+                        <label
+                          htmlFor="member-csv-file-input"
+                          className="block text-[11px] font-semibold text-slate-300 uppercase mb-1"
+                        >
+                          Upload CSV File
+                        </label>
+                        <input
+                          id="member-csv-file-input"
+                          type="file"
+                          accept=".csv,text/csv"
+                          onChange={handleMemberCsvFileChange}
+                          className="text-xs text-slate-300 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-emerald-950 file:text-emerald-300 hover:file:bg-emerald-900"
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const defaultUnit = memberCreatableUnits[0]
+                          const sampleUnitCol = defaultUnit ? defaultUnit.id : 'unit_name'
+                          const sampleHeader = defaultUnit
+                            ? 'full_name,preferred_name,gender,phone_number,email,home_unit_id,member_number'
+                            : 'full_name,preferred_name,gender,phone_number,email,unit_name,member_number'
+                          const sampleRow1 = defaultUnit
+                            ? `Adedayo Ogunleye,Dayo,M,08031234567,dayo@example.com,${sampleUnitCol},MRN-1001`
+                            : 'Adedayo Ogunleye,Dayo,M,08031234567,dayo@example.com,Obantoko 1st Ward,MRN-1001'
+                          const sampleRow2 = defaultUnit
+                            ? `Funmilayo Bakare,Funmi,F,08059876543,funmi@example.com,${sampleUnitCol},MRN-1002`
+                            : 'Funmilayo Bakare,Funmi,F,08059876543,funmi@example.com,Obantoko 1st Ward,MRN-1002'
+                          setMemberCsvText(`${sampleHeader}\n${sampleRow1}\n${sampleRow2}`)
+                          setMemberImportResult(null)
+                        }}
+                        className="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-700 rounded-lg text-[11px] text-slate-300 font-semibold"
+                      >
+                        Load Sample Template
+                      </button>
+                    </div>
+
+                    <div>
+                      <label
+                        htmlFor="member-csv-textarea"
+                        className="block text-[11px] text-slate-400 uppercase mb-1 font-semibold"
+                      >
+                        CSV Content (Headers: full_name, preferred_name, gender, phone_number, email, home_unit_id or unit_name, member_number, id)
+                      </label>
+                      <textarea
+                        id="member-csv-textarea"
+                        rows={5}
+                        value={memberCsvText}
+                        onChange={(e) => {
+                          setMemberCsvText(e.target.value)
+                          setMemberImportResult(null)
+                        }}
+                        placeholder="full_name,preferred_name,gender,phone_number,email,home_unit_id,member_number&#10;Oluwatosin Adeyemi,Tosin,M,08030000000,tosin@example.com,<unit-uuid>,MRN-001"
+                        className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs font-mono text-white"
+                      />
+                    </div>
+
+                    {/* Pre-Import Validation Summary */}
+                    {memberCsvValidation && (
+                      <div
+                        className="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-4"
+                        data-testid="member-csv-validation-summary"
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 pb-2.5">
+                          <h4 className="text-xs font-bold uppercase tracking-wider text-white">
+                            Pre-Import Validation Summary
+                          </h4>
+                          <span
+                            className={`px-2.5 py-0.5 rounded-full text-[11px] font-semibold border ${
+                              memberCsvValidation.isValid
+                                ? 'bg-emerald-950/80 border-emerald-700/70 text-emerald-300'
+                                : 'bg-red-950/80 border-red-700/70 text-red-300'
+                            }`}
+                          >
+                            {memberCsvValidation.isValid
+                              ? 'Ready for Atomic Import'
+                              : 'Validation Errors Detected — Import Blocked'}
+                          </span>
+                        </div>
+
+                        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5 text-xs">
+                          <div className="p-2.5 bg-slate-900 border border-slate-800 rounded-lg">
+                            <span className="text-[10px] uppercase text-slate-400 block">Total rows</span>
+                            <span className="text-base font-bold text-white" data-testid="csv-total-rows">
+                              {memberCsvValidation.summary.totalRows}
+                            </span>
+                          </div>
+                          <div className="p-2.5 bg-slate-900 border border-slate-800 rounded-lg">
+                            <span className="text-[10px] uppercase text-slate-400 block">Valid rows</span>
+                            <span className="text-base font-bold text-emerald-400" data-testid="csv-valid-rows">
+                              {memberCsvValidation.summary.validRows}
+                            </span>
+                          </div>
+                          <div className="p-2.5 bg-slate-900 border border-slate-800 rounded-lg">
+                            <span className="text-[10px] uppercase text-slate-400 block">Invalid rows</span>
+                            <span
+                              className={`text-base font-bold ${
+                                memberCsvValidation.summary.invalidRows > 0 ? 'text-red-400' : 'text-slate-300'
+                              }`}
+                              data-testid="csv-invalid-rows"
+                            >
+                              {memberCsvValidation.summary.invalidRows}
+                            </span>
+                          </div>
+                          <div className="p-2.5 bg-slate-900 border border-slate-800 rounded-lg">
+                            <span className="text-[10px] uppercase text-slate-400 block">Gender mapping issues</span>
+                            <span
+                              className={`text-base font-bold ${
+                                memberCsvValidation.summary.genderMappingIssues > 0
+                                  ? 'text-red-400'
+                                  : 'text-slate-300'
+                              }`}
+                              data-testid="csv-gender-issues"
+                            >
+                              {memberCsvValidation.summary.genderMappingIssues}
+                            </span>
+                            {memberCsvValidation.summary.genderNormalizedCount > 0 && (
+                              <span className="block text-[10px] text-emerald-400 mt-0.5">
+                                {memberCsvValidation.summary.genderNormalizedCount} auto-mapped (M/F &rarr; male/female)
+                              </span>
+                            )}
+                          </div>
+                          <div className="p-2.5 bg-slate-900 border border-slate-800 rounded-lg">
+                            <span className="text-[10px] uppercase text-slate-400 block">Missing required fields</span>
+                            <span
+                              className={`text-base font-bold ${
+                                memberCsvValidation.summary.missingRequiredFields > 0
+                                  ? 'text-red-400'
+                                  : 'text-slate-300'
+                              }`}
+                              data-testid="csv-missing-fields"
+                            >
+                              {memberCsvValidation.summary.missingRequiredFields}
+                            </span>
+                          </div>
+                          <div className="p-2.5 bg-slate-900 border border-slate-800 rounded-lg">
+                            <span className="text-[10px] uppercase text-slate-400 block">Duplicate/conflicting records</span>
+                            <span
+                              className={`text-base font-bold ${
+                                memberCsvValidation.summary.duplicateOrConflictingRecords > 0
+                                  ? 'text-red-400'
+                                  : 'text-slate-300'
+                              }`}
+                              data-testid="csv-duplicate-records"
+                            >
+                              {memberCsvValidation.summary.duplicateOrConflictingRecords}
+                            </span>
+                          </div>
+                        </div>
+
+                        {memberCsvValidation.errors.length > 0 && (
+                          <div className="space-y-2">
+                            <p className="text-xs font-semibold text-red-300">
+                              Validation Issues ({memberCsvValidation.errors.length}) — Fix these rows before importing:
+                            </p>
+                            <div className="max-h-44 overflow-y-auto border border-red-900/60 rounded-lg bg-red-950/20">
+                              <table className="w-full text-[11px] text-left text-red-200">
+                                <thead className="bg-red-950/60 text-[10px] uppercase text-red-300 sticky top-0">
+                                  <tr>
+                                    <th className="px-3 py-2">CSV Row #</th>
+                                    <th className="px-3 py-2">Column</th>
+                                    <th className="px-3 py-2">Error Description</th>
+                                  </tr>
+                                </thead>
+                                <tbody className="divide-y divide-red-900/40">
+                                  {memberCsvValidation.errors.slice(0, 100).map((err, idx) => (
+                                    <tr key={`${err.rowNumber}-${err.column}-${idx}`}>
+                                      <td className="px-3 py-1.5 font-mono font-semibold">
+                                        Row {err.rowNumber} (Line {err.csvLineNumber})
+                                      </td>
+                                      <td className="px-3 py-1.5 font-mono">{err.column}</td>
+                                      <td className="px-3 py-1.5">{err.message}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                        )}
+
+                        {memberCsvValidation.validRecords.length > 0 && (
+                          <div className="space-y-2">
+                            <p className="text-xs font-semibold text-slate-300">
+                              Validated Records Preview (Showing first {Math.min(10, memberCsvValidation.validRecords.length)} of {memberCsvValidation.validRecords.length}):
+                            </p>
+                            <div className="max-h-44 overflow-y-auto border border-slate-800 rounded-lg">
+                              <table className="w-full text-[11px] text-left text-slate-300">
+                                <thead className="bg-slate-900 text-[10px] uppercase text-slate-400 sticky top-0">
+                                  <tr>
+                                    <th className="px-3 py-2">Row #</th>
+                                    <th className="px-3 py-2">Full Name</th>
+                                    <th className="px-3 py-2">Canonical Gender</th>
+                                    <th className="px-3 py-2">Unit</th>
+                                    <th className="px-3 py-2">Phone / Member #</th>
+                                  </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-800/80">
+                                  {memberCsvValidation.validRecords.slice(0, 10).map((rec) => (
+                                    <tr key={rec.rowNumber}>
+                                      <td className="px-3 py-1.5 font-mono text-slate-400">#{rec.rowNumber}</td>
+                                      <td className="px-3 py-1.5 font-semibold text-white">
+                                        {rec.fullName}
+                                        {rec.preferredName ? ` (${rec.preferredName})` : ''}
+                                      </td>
+                                      <td className="px-3 py-1.5">
+                                        {rec.gender ? (
+                                          <span className="font-mono text-emerald-300">
+                                            {rec.gender}
+                                            {rec.genderWasNormalized ? ` (from "${rec.rawGender}")` : ''}
+                                          </span>
+                                        ) : (
+                                          <span className="text-slate-500">null</span>
+                                        )}
+                                      </td>
+                                      <td className="px-3 py-1.5">{rec.homeUnitName || rec.homeUnitId}</td>
+                                      <td className="px-3 py-1.5">
+                                        {[rec.phoneNumber, rec.memberNumber].filter(Boolean).join(' • ') || '-'}
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {memberImportResult && !memberImportResult.success && memberImportResult.error && (
+                      <div className="p-3 bg-red-950/60 border border-red-800 rounded-xl text-xs text-red-200" role="alert">
+                        {memberImportResult.error}
+                      </div>
+                    )}
+
+                    <div className="flex justify-end space-x-2 pt-2 border-t border-slate-800">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowMemberCsvModal(false)
+                          setMemberCsvText('')
+                          setMemberImportResult(null)
+                        }}
+                        disabled={isImportingMembers}
+                        className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-lg"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleExecuteMemberCsvImport}
+                        disabled={
+                          isImportingMembers ||
+                          !memberCsvValidation ||
+                          !memberCsvValidation.isValid ||
+                          memberCsvValidation.summary.validRows === 0
+                        }
+                        className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-xs font-semibold rounded-lg flex items-center space-x-1.5"
+                      >
+                        {isImportingMembers ? (
+                          <>
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            <span>Importing Members...</span>
+                          </>
+                        ) : (
+                          <span>
+                            Import Validated Members
+                            {memberCsvValidation && memberCsvValidation.isValid
+                              ? ` (${memberCsvValidation.summary.validRows})`
+                              : ''}
+                          </span>
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
