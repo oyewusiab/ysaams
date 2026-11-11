@@ -1171,7 +1171,8 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
 
   const isSubpathPermitted = isLeadershipRoutePermitted(currentSubpath, {
     isStakeLeader,
-    canRecordManualAttendance
+    canRecordManualAttendance,
+    canAccessGatheringPlace
   })
 
   if (!isSubpathPermitted) {
