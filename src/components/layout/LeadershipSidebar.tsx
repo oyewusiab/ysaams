@@ -16,7 +16,8 @@ import {
   LogOut,
   Sun,
   Moon,
-  ExternalLink
+  ExternalLink,
+  Compass
 } from 'lucide-react'
 import { useAuth } from '../../context/AuthContext'
 import { useTheme } from '../../context/ThemeContext'
@@ -25,6 +26,7 @@ import { AppRole, LeadershipRoute } from '../../types/database'
 export interface RoleNavAccess {
   isStakeLeader: boolean
   canRecordManualAttendance: boolean
+  canAccessGatheringPlace?: boolean
 }
 
 /**
@@ -59,6 +61,11 @@ export function getRolePermittedNavItems(
     { id: 'reports', label: 'Reports & Export', icon: BarChart3 },
     { id: 'units', label: 'Stake Units', icon: Building2 }
   )
+
+  // Gathering Place module is visible to authorized Stake leadership (Admin, Stake Presidency, Stake Clerk, Stake YSA Leader)
+  if (access.canAccessGatheringPlace) {
+    items.push({ id: 'gathering-place', label: 'Gathering Place', icon: Compass })
+  }
 
   // Governance and audit logs are strictly restricted to stake presidency and system admin
   if (access.isStakeLeader) {
@@ -95,7 +102,7 @@ export const LeadershipSidebar: React.FC<LeadershipSidebarProps> = ({
   onNavigateSubpath,
   onNavigateHome
 }) => {
-  const { user, isStakeLeader, canRecordManualAttendance, signOut } = useAuth()
+  const { user, isStakeLeader, canRecordManualAttendance, canAccessGatheringPlace, signOut } = useAuth()
   const { theme, toggleTheme } = useTheme()
 
   const [isCollapsed, setIsCollapsed] = useState<boolean>(() => {
@@ -134,7 +141,8 @@ export const LeadershipSidebar: React.FC<LeadershipSidebarProps> = ({
 
   const navItems = getRolePermittedNavItems({
     isStakeLeader,
-    canRecordManualAttendance
+    canRecordManualAttendance,
+    canAccessGatheringPlace
   })
 
   const roleDisplay = user?.roles?.[0]?.replace(/_/g, ' ') || 'Leader'

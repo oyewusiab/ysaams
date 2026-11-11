@@ -8,6 +8,7 @@ import { IdleSessionWatcher } from './components/layout/IdleTimeoutModal'
 import { PublicAttendanceView } from './components/public/PublicAttendanceView'
 import { TerminalView } from './components/public/TerminalView'
 import { LeadershipPortalView } from './components/leadership/LeadershipPortalView'
+import { PublicSurveyView } from './components/gatheringPlace/PublicSurveyView'
 import { LeadershipRoute } from './types/database'
 import { attendanceService } from './services/attendanceService'
 import { parseAuthCallbackUrl } from './services/authService'
@@ -17,7 +18,21 @@ import { parseAuthCallbackUrl } from './services/authService'
  * Exported for comprehensive unit testing.
  */
 export function isLeadershipPath(path: string): boolean {
-  return path === '/la' || path.startsWith('/la/')
+  return (
+    path === '/la' ||
+    path.startsWith('/la/') ||
+    path === '/admin/gathering-place' ||
+    path.startsWith('/admin/gathering-place/')
+  )
+}
+
+export function isGatheringPlaceSurveyPath(path: string): boolean {
+  return (
+    path === '/gathering-place' ||
+    path === '/gathering-place/' ||
+    path === '/gathering-place/survey' ||
+    path.startsWith('/gathering-place/survey/')
+  )
 }
 
 export function resolveInitialRoutePath(
@@ -39,12 +54,22 @@ export function resolveLeadershipSubpath(path: string): LeadershipRoute {
   if (path === '/la' || path === '/la/') {
     return 'dashboard'
   }
-  const clean = path.replace(/^\/la\/?/, '').replace(/\/$/, '')
+  const clean = path
+    .replace(/^\/la\/?/, '')
+    .replace(/^\/admin\/?/, '')
+    .replace(/\/$/, '')
 
   // Supported Route Aliases
   if (clean === 'sessions') return 'activities'
   if (clean === 'audit') return 'audit-logs'
   if (clean === 'admin') return 'users'
+  if (
+    clean === 'gathering-place' ||
+    clean === 'gathering-place/assessment' ||
+    clean === 'gathering-place/responses'
+  ) {
+    return 'gathering-place'
+  }
 
   const validSubpaths: LeadershipRoute[] = [
     'dashboard',
@@ -55,7 +80,8 @@ export function resolveLeadershipSubpath(path: string): LeadershipRoute {
     'units',
     'users',
     'settings',
-    'audit-logs'
+    'audit-logs',
+    'gathering-place'
   ]
   if (validSubpaths.includes(clean as LeadershipRoute)) {
     return clean as LeadershipRoute
@@ -64,8 +90,13 @@ export function resolveLeadershipSubpath(path: string): LeadershipRoute {
 }
 
 export function extractSessionCode(path: string): string | null {
-  // Never match leadership or terminal paths as session codes
-  if (isLeadershipPath(path) || path === '/terminal' || path === '/terminal/') {
+  // Never match leadership, gathering place survey, or terminal paths as session codes
+  if (
+    isLeadershipPath(path) ||
+    isGatheringPlaceSurveyPath(path) ||
+    path === '/terminal' ||
+    path === '/terminal/'
+  ) {
     return null
   }
   // Matches exact 6-char alphanumeric code (e.g., /5BV21F)
@@ -161,7 +192,19 @@ export const AppContent: React.FC = () => {
     )
   }
 
-  // 2. Terminal Redeemed Route
+  // 2. Gathering Place Public Survey Route
+  if (isGatheringPlaceSurveyPath(currentPath)) {
+    return (
+      <div className="min-h-screen flex flex-col bg-slate-50 text-slate-900">
+        <Navbar currentPath={currentPath} onNavigate={navigateTo} />
+        <main className="flex-1">
+          <PublicSurveyView onNavigateHome={() => navigateTo('/')} />
+        </main>
+      </div>
+    )
+  }
+
+  // 3. Terminal Redeemed Route
   if (currentPath === '/terminal' || activeTerminalCode !== null) {
     return (
       <div className="min-h-screen flex flex-col bg-slate-50 text-slate-900">

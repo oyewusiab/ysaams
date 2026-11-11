@@ -49,6 +49,7 @@ import { attendanceService } from '../../services/attendanceService'
 import { reportService } from '../../services/reportService'
 import { ReportingWorkspace } from '../reporting/ReportingWorkspace'
 import { LiveActiveSessionView } from '../reporting/LiveActiveSessionView'
+import { GatheringPlaceLeadershipView } from '../gatheringPlace/GatheringPlaceLeadershipView'
 import {
   getRolePermittedNavItems,
   isLeadershipRoutePermitted,
@@ -90,6 +91,7 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
     canManageActivities,
     canManageMembers,
     canRecordManualAttendance,
+    canAccessGatheringPlace,
     manageableUnitIds,
     reportUnitFilter,
     isPasswordRecovery,
@@ -3939,7 +3941,37 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
           </div>
         )}
 
-        {/* 9. SETTINGS & SECURITY PROFILE VIEW */}
+        {/* 9. GATHERING PLACE VIEW */}
+        {currentSubpath === 'gathering-place' && (
+          <div className="space-y-6">
+            {!canAccessGatheringPlace ? (
+              <div className="p-8 bg-slate-950 border border-slate-800 rounded-2xl text-center text-slate-400 space-y-4 max-w-lg mx-auto">
+                <div className="w-14 h-14 bg-slate-900 border border-slate-800 rounded-2xl flex items-center justify-center mx-auto text-amber-400 shadow-md">
+                  <ShieldAlert className="w-7 h-7 text-amber-400" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white mb-1">Access Restricted to Stake Leadership</h3>
+                  <p className="text-xs text-slate-400 leading-relaxed">
+                    YSA Gathering Place Needs Assessment and Analytics require Stake System Administrator (<code className="text-emerald-400 font-mono">system_admin</code>), Stake Presidency, Stake Clerk, or Stake YSA Leader authorization.
+                  </p>
+                </div>
+                <div className="flex justify-center gap-3 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => onNavigateSubpath('dashboard')}
+                    className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-semibold transition"
+                  >
+                    Return to Dashboard
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <GatheringPlaceLeadershipView onNavigateSubpath={onNavigateSubpath} />
+            )}
+          </div>
+        )}
+
+        {/* 10. SETTINGS & SECURITY PROFILE VIEW */}
         {currentSubpath === 'settings' && (
           <div className="space-y-6">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">

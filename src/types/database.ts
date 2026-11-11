@@ -203,4 +203,5 @@ export type LeadershipRoute =
   | 'users'
   | 'settings'
   | 'audit-logs'
+  | 'gathering-place'
   | 'not-found'
