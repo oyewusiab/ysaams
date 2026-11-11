@@ -29,22 +29,10 @@ STABLE
 SET search_path = public, pg_temp
 AS $$
     SELECT EXISTS (
-        -- Admin, Stake Presidency, Stake Clerk
+        -- Authorized roles: system_admin, stake_presidency, stake_clerk, ysa_leader
         SELECT 1 FROM public.user_roles
         WHERE user_id = p_user_id
-          AND role_name IN ('system_admin', 'stake_presidency', 'stake_clerk')
-    )
-    OR EXISTS (
-        -- Stake YSA Leader: holds 'ysa_leader' AND is either stake-wide unconstrained
-        -- (no unit assignments) or assigned to all active stake units.
-        SELECT 1 FROM public.user_roles ur
-        WHERE ur.user_id = p_user_id
-          AND ur.role_name = 'ysa_leader'
-          AND (
-              NOT EXISTS (SELECT 1 FROM public.user_unit_assignments WHERE user_id = p_user_id)
-              OR (SELECT count(DISTINCT unit_id) FROM public.user_unit_assignments WHERE user_id = p_user_id AND assigned_role = 'ysa_leader') >=
-                 (SELECT count(*) FROM public.stake_units WHERE is_active = TRUE)
-          )
+          AND role_name IN ('system_admin', 'stake_presidency', 'stake_clerk', 'ysa_leader')
     );
 $$;
 

@@ -480,19 +480,19 @@ describe('YSA Gathering Place — Needs Assessment & Analytics Module', () => {
       expect(navItems.some((item) => item.id === 'gathering-place')).toBe(false)
     })
 
-    it('STRICTLY DENIES Ward YSA Leader (assigned to only 1 unit) from accessing Gathering Place module', () => {
+    it('allows YSA Leader (including unit-assigned YSA leaders) to access Gathering Place module', () => {
       const access = deriveLeadershipAccess(
         ['ysa_leader'],
         [makeAssignment('unit-camp', 'ysa_leader')]
       )
-      expect(access.canAccessGatheringPlace).toBe(false)
+      expect(access.canAccessGatheringPlace).toBe(true)
 
       const navItems = getRolePermittedNavItems({
         isStakeLeader: access.isStakeLeader,
         canRecordManualAttendance: access.canRecordManualAttendance,
         canAccessGatheringPlace: access.canAccessGatheringPlace
       })
-      expect(navItems.some((item) => item.id === 'gathering-place')).toBe(false)
+      expect(navItems.some((item) => item.id === 'gathering-place')).toBe(true)
     })
 
     it('STRICTLY DENIES Ward Clerk and Branch Clerk from accessing Gathering Place module', () => {

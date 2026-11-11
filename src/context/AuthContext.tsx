@@ -92,22 +92,17 @@ export function deriveLeadershipAccess(
     roles.some((r) => viewOnlyTargetRoles.includes(r)) &&
     !roles.some((r) => excludedFromViewOnlyRoles.includes(r))
 
-  // Gathering Place Access strictly restricted to:
-  // 1. system_admin (Admin)
-  // 2. stake_presidency
-  // 3. stake_clerk
-  // 4. Stake YSA Leader (ysa_leader with unconstrained stake-wide assignment or assigned to all 8 stake units)
-  // Strictly denied to: bishop, branch_president, ward_clerk, branch_clerk, ward ysa leaders, general attendees
-  const isStakeYsaLeader =
-    roles.includes('ysa_leader') &&
-    (validAssignments.filter((ua) => ua.assignedRole === 'ysa_leader').length === 0 ||
-      manageableUnitIds.length >= 8)
-
+  // Gathering Place Access strictly restricted to the 4 authorized roles:
+  // - system_admin
+  // - stake_clerk
+  // - stake_presidency
+  // - ysa_leader
+  // Strictly denied to: bishop, branch_president, ward_clerk, branch_clerk, general attendees
   const canAccessGatheringPlace =
-    isSystemAdmin ||
+    roles.includes('system_admin') ||
+    roles.includes('stake_clerk') ||
     roles.includes('stake_presidency') ||
-    isStakeClerk ||
-    isStakeYsaLeader
+    roles.includes('ysa_leader')
 
   const reportUnitFilter: string[] | null = hasStakeWideReadAccess ? null : assignedUnitIds
 
