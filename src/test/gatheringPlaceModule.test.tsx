@@ -210,6 +210,29 @@ describe('YSA Gathering Place — Needs Assessment & Analytics Module', () => {
       }
       expect(validateSurveySubmission(payloadWithBlanks).valid).toBe(true)
     })
+
+    it('handles "Other" specifications properly for custom skills and status', () => {
+      const payloadWithOther: GatheringPlaceSubmissionPayload = {
+        ...validPayload,
+        current_status: 'Other: NYSC Corp Member',
+        education_level: 'Other: Professional Certificate',
+        hard_skill_first_choice: 'Other: Solar Installation & Inverters',
+        hard_skill_second_choice: 'Other: Plumbing & Pipeline',
+        hard_skill_third_choice: 'Computer Literacy & Microsoft Office',
+        soft_skills: ['Communication Skills', 'Other: Negotiation & Deal Making'],
+        desired_outcomes: ['Acquire a new skill', 'Other: Prepare for Mission']
+      }
+      const res = validateSurveySubmission(payloadWithOther)
+      expect(res.valid).toBe(true)
+
+      // Duplicate "Other" skills must still be caught
+      const duplicateOther = {
+        ...payloadWithOther,
+        hard_skill_first_choice: 'Other: Solar Installation',
+        hard_skill_second_choice: 'Other: Solar Installation'
+      }
+      expect(validateSurveySubmission(duplicateOther).valid).toBe(false)
+    })
   })
 
   // ==========================================================================
@@ -338,6 +361,47 @@ describe('YSA Gathering Place — Needs Assessment & Analytics Module', () => {
       expect(topSlot.timePeriod).toBe('Morning (8 AM – 12 PM)')
       expect(topSlot.score).toBe(3)
       expect(topSlot.rationale).toContain('3 respondents (100%) selected availability')
+    })
+
+    it('aggregates specified "Other: ..." responses into the canonical Other category for macro rankings', () => {
+      const responsesWithOther: GatheringPlaceResponse[] = [
+        {
+          id: 'resp-other-1',
+          assessmentId: 'a1',
+          wardBranch: 'Obantoko Ward',
+          currentStatus: 'Other: NYSC Member',
+          educationLevel: 'Other: Diploma',
+          currentSelfRelianceParticipation: 'No',
+          hardSkillFirstChoice: 'Other: Solar Installation',
+          hardSkillSecondChoice: 'Web Design & Development',
+          hardSkillThirdChoice: 'Graphic Design (Canva, Photoshop, etc.)',
+          softSkills: ['Other: Mediation'],
+          selfRelianceClassInterest: 'Starting and Growing My Business',
+          desiredOutcomes: ['Other: Mission prep'],
+          experienceLevel: 'Beginner — I have little or no experience',
+          preferredDays: ['Saturday'],
+          preferredTimePeriods: ['Morning (8 AM – 12 PM)'],
+          submittedAt: '2026-11-10T10:00:00Z'
+        }
+      ]
+
+      const analytics = gatheringPlaceService.computeAnalytics(responsesWithOther)
+      const otherHardSkill = analytics.hardSkillsRanked.find((s) => s.skill === 'Other')
+      expect(otherHardSkill).toBeDefined()
+      expect(otherHardSkill!.firstChoiceCount).toBe(1)
+      expect(otherHardSkill!.overallCount).toBe(1)
+
+      const otherStatus = analytics.statusDistribution.find((s) => s.label === 'Other')
+      expect(otherStatus).toBeDefined()
+      expect(otherStatus!.count).toBe(1)
+
+      const otherEdu = analytics.educationDistribution.find((s) => s.label === 'Other')
+      expect(otherEdu).toBeDefined()
+      expect(otherEdu!.count).toBe(1)
+
+      const otherSoft = analytics.softSkillsRanked.find((s) => s.label === 'Other')
+      expect(otherSoft).toBeDefined()
+      expect(otherSoft!.count).toBe(1)
     })
 
     it('generates unit breakdown across all 8 Stake units', () => {

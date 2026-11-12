@@ -45,22 +45,29 @@ export const PublicSurveyView: React.FC<PublicSurveyViewProps> = ({ onNavigateHo
   // Survey Form State
   const [wardBranch, setWardBranch] = useState<string>('')
   const [currentStatus, setCurrentStatus] = useState<string>('')
+  const [currentStatusOther, setCurrentStatusOther] = useState<string>('')
   const [educationLevel, setEducationLevel] = useState<string>('')
+  const [educationLevelOther, setEducationLevelOther] = useState<string>('')
   const [currentSelfReliance, setCurrentSelfReliance] = useState<string>('')
 
   // Ranked Hard Skills (Distinct)
   const [hardSkillFirst, setHardSkillFirst] = useState<string>('')
+  const [hardSkillFirstOther, setHardSkillFirstOther] = useState<string>('')
   const [hardSkillSecond, setHardSkillSecond] = useState<string>('')
+  const [hardSkillSecondOther, setHardSkillSecondOther] = useState<string>('')
   const [hardSkillThird, setHardSkillThird] = useState<string>('')
+  const [hardSkillThirdOther, setHardSkillThirdOther] = useState<string>('')
 
   // Soft Skills (Max 3)
   const [softSkills, setSoftSkills] = useState<string[]>([])
+  const [softSkillsOther, setSoftSkillsOther] = useState<string>('')
 
   // Self-Reliance Class
   const [selfRelianceClass, setSelfRelianceClass] = useState<string>('')
 
   // Goals (Max 3)
   const [desiredOutcomes, setDesiredOutcomes] = useState<string[]>([])
+  const [desiredOutcomesOther, setDesiredOutcomesOther] = useState<string>('')
 
   // Experience Level
   const [experienceLevel, setExperienceLevel] = useState<string>('')
@@ -110,6 +117,7 @@ export const PublicSurveyView: React.FC<PublicSurveyViewProps> = ({ onNavigateHo
   const toggleSoftSkill = (skill: string) => {
     setSoftSkills((prev) => {
       if (prev.includes(skill)) {
+        if (skill === 'Other') setSoftSkillsOther('')
         return prev.filter((s) => s !== skill)
       }
       if (prev.length >= 3) {
@@ -124,6 +132,7 @@ export const PublicSurveyView: React.FC<PublicSurveyViewProps> = ({ onNavigateHo
   const toggleDesiredOutcome = (goal: string) => {
     setDesiredOutcomes((prev) => {
       if (prev.includes(goal)) {
+        if (goal === 'Other') setDesiredOutcomesOther('')
         return prev.filter((g) => g !== goal)
       }
       if (prev.length >= 3) {
@@ -147,6 +156,42 @@ export const PublicSurveyView: React.FC<PublicSurveyViewProps> = ({ onNavigateHo
     )
   }
 
+  // Resolved values for selections with "Other" specification
+  const getResolvedStatus = (): string =>
+    currentStatus === 'Other' && currentStatusOther.trim()
+      ? `Other: ${currentStatusOther.trim()}`
+      : currentStatus
+
+  const getResolvedEducation = (): string =>
+    educationLevel === 'Other' && educationLevelOther.trim()
+      ? `Other: ${educationLevelOther.trim()}`
+      : educationLevel
+
+  const getResolvedHardFirst = (): string =>
+    hardSkillFirst === 'Other' && hardSkillFirstOther.trim()
+      ? `Other: ${hardSkillFirstOther.trim()}`
+      : hardSkillFirst
+
+  const getResolvedHardSecond = (): string =>
+    hardSkillSecond === 'Other' && hardSkillSecondOther.trim()
+      ? `Other: ${hardSkillSecondOther.trim()}`
+      : hardSkillSecond
+
+  const getResolvedHardThird = (): string =>
+    hardSkillThird === 'Other' && hardSkillThirdOther.trim()
+      ? `Other: ${hardSkillThirdOther.trim()}`
+      : hardSkillThird
+
+  const getResolvedSoftSkills = (): string[] =>
+    softSkills.map((s) =>
+      s === 'Other' && softSkillsOther.trim() ? `Other: ${softSkillsOther.trim()}` : s
+    )
+
+  const getResolvedDesiredOutcomes = (): string[] =>
+    desiredOutcomes.map((g) =>
+      g === 'Other' && desiredOutcomesOther.trim() ? `Other: ${desiredOutcomesOther.trim()}` : g
+    )
+
   // Section Validation Helpers
   const validateSectionAbout = (): boolean => {
     if (!wardBranch) {
@@ -157,8 +202,16 @@ export const PublicSurveyView: React.FC<PublicSurveyViewProps> = ({ onNavigateHo
       setValidationWarning('Please select your current status.')
       return false
     }
+    if (currentStatus === 'Other' && !currentStatusOther.trim()) {
+      setValidationWarning('Please specify your current status in the field provided.')
+      return false
+    }
     if (!educationLevel) {
       setValidationWarning('Please select your highest level of education.')
+      return false
+    }
+    if (educationLevel === 'Other' && !educationLevelOther.trim()) {
+      setValidationWarning('Please specify your highest level of education in the field provided.')
       return false
     }
     if (!currentSelfReliance) {
@@ -174,11 +227,22 @@ export const PublicSurveyView: React.FC<PublicSurveyViewProps> = ({ onNavigateHo
       setValidationWarning('Please select your 1st, 2nd, and 3rd preferred practical skills.')
       return false
     }
-    if (
-      hardSkillFirst === hardSkillSecond ||
-      hardSkillFirst === hardSkillThird ||
-      hardSkillSecond === hardSkillThird
-    ) {
+    if (hardSkillFirst === 'Other' && !hardSkillFirstOther.trim()) {
+      setValidationWarning('Please specify your 1st preferred practical skill.')
+      return false
+    }
+    if (hardSkillSecond === 'Other' && !hardSkillSecondOther.trim()) {
+      setValidationWarning('Please specify your 2nd preferred practical skill.')
+      return false
+    }
+    if (hardSkillThird === 'Other' && !hardSkillThirdOther.trim()) {
+      setValidationWarning('Please specify your 3rd preferred practical skill.')
+      return false
+    }
+    const h1 = getResolvedHardFirst()
+    const h2 = getResolvedHardSecond()
+    const h3 = getResolvedHardThird()
+    if (h1 === h2 || h1 === h3 || h2 === h3) {
       setValidationWarning('Please select three different skills for your first, second, and third preferences.')
       return false
     }
@@ -188,6 +252,10 @@ export const PublicSurveyView: React.FC<PublicSurveyViewProps> = ({ onNavigateHo
     }
     if (softSkills.length > 3) {
       setValidationWarning('You can select a maximum of 3 soft skills.')
+      return false
+    }
+    if (softSkills.includes('Other') && !softSkillsOther.trim()) {
+      setValidationWarning('Please specify the other soft skill you would like to develop.')
       return false
     }
     if (!selfRelianceClass) {
@@ -205,6 +273,10 @@ export const PublicSurveyView: React.FC<PublicSurveyViewProps> = ({ onNavigateHo
     }
     if (desiredOutcomes.length > 3) {
       setValidationWarning('You can select a maximum of 3 goals.')
+      return false
+    }
+    if (desiredOutcomes.includes('Other') && !desiredOutcomesOther.trim()) {
+      setValidationWarning('Please specify your other goal or expected outcome in the field provided.')
       return false
     }
     if (!experienceLevel) {
@@ -234,15 +306,15 @@ export const PublicSurveyView: React.FC<PublicSurveyViewProps> = ({ onNavigateHo
     const payload: GatheringPlaceSubmissionPayload = {
       assessment_id: assessment.id,
       ward_branch: wardBranch,
-      current_status: currentStatus,
-      education_level: educationLevel,
+      current_status: getResolvedStatus(),
+      education_level: getResolvedEducation(),
       current_self_reliance_participation: currentSelfReliance,
-      hard_skill_first_choice: hardSkillFirst,
-      hard_skill_second_choice: hardSkillSecond,
-      hard_skill_third_choice: hardSkillThird,
-      soft_skills: softSkills,
+      hard_skill_first_choice: getResolvedHardFirst(),
+      hard_skill_second_choice: getResolvedHardSecond(),
+      hard_skill_third_choice: getResolvedHardThird(),
+      soft_skills: getResolvedSoftSkills(),
       self_reliance_class_interest: selfRelianceClass,
-      desired_outcomes: desiredOutcomes,
+      desired_outcomes: getResolvedDesiredOutcomes(),
       experience_level: experienceLevel,
       desired_5_6_month_outcome: outcome56Month,
       additional_skills_suggestions: additionalSkills,
@@ -273,14 +345,21 @@ export const PublicSurveyView: React.FC<PublicSurveyViewProps> = ({ onNavigateHo
   const resetForm = () => {
     setWardBranch('')
     setCurrentStatus('')
+    setCurrentStatusOther('')
     setEducationLevel('')
+    setEducationLevelOther('')
     setCurrentSelfReliance('')
     setHardSkillFirst('')
+    setHardSkillFirstOther('')
     setHardSkillSecond('')
+    setHardSkillSecondOther('')
     setHardSkillThird('')
+    setHardSkillThirdOther('')
     setSoftSkills([])
+    setSoftSkillsOther('')
     setSelfRelianceClass('')
     setDesiredOutcomes([])
+    setDesiredOutcomesOther('')
     setExperienceLevel('')
     setOutcome56Month('')
     setAdditionalSkills('')
@@ -291,6 +370,7 @@ export const PublicSurveyView: React.FC<PublicSurveyViewProps> = ({ onNavigateHo
     setValidationWarning(null)
     setCurrentStep('intro')
   }
+
 
   if (isLoadingAssessment) {
     return (
@@ -545,13 +625,37 @@ export const PublicSurveyView: React.FC<PublicSurveyViewProps> = ({ onNavigateHo
                     name="currentStatus"
                     value={opt}
                     checked={currentStatus === opt}
-                    onChange={() => setCurrentStatus(opt)}
+                    onChange={() => {
+                      setCurrentStatus(opt)
+                      if (opt !== 'Other') setCurrentStatusOther('')
+                      setValidationWarning(null)
+                    }}
                     className="w-4 h-4 text-emerald-600 focus:ring-emerald-500 mr-3"
                   />
                   <span>{opt}</span>
                 </label>
               ))}
             </div>
+
+            {currentStatus === 'Other' && (
+              <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-1.5 animate-in fade-in-50 duration-200">
+                <label className="block text-xs font-semibold text-slate-800">
+                  Please specify your current status <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  value={currentStatusOther}
+                  onChange={(e) => {
+                    setCurrentStatusOther(e.target.value)
+                    setValidationWarning(null)
+                  }}
+                  placeholder="e.g., NYSC Corp Member, Freelancer, Volunteering..."
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-white text-slate-900 text-xs sm:text-sm"
+                  maxLength={100}
+                  autoFocus
+                />
+              </div>
+            )}
           </div>
 
           {/* Q3: Highest Level of Education */}
@@ -574,13 +678,37 @@ export const PublicSurveyView: React.FC<PublicSurveyViewProps> = ({ onNavigateHo
                     name="educationLevel"
                     value={opt}
                     checked={educationLevel === opt}
-                    onChange={() => setEducationLevel(opt)}
+                    onChange={() => {
+                      setEducationLevel(opt)
+                      if (opt !== 'Other') setEducationLevelOther('')
+                      setValidationWarning(null)
+                    }}
                     className="w-4 h-4 text-emerald-600 focus:ring-emerald-500 mr-3"
                   />
                   <span>{opt}</span>
                 </label>
               ))}
             </div>
+
+            {educationLevel === 'Other' && (
+              <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-1.5 animate-in fade-in-50 duration-200">
+                <label className="block text-xs font-semibold text-slate-800">
+                  Please specify your highest level of education <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  value={educationLevelOther}
+                  onChange={(e) => {
+                    setEducationLevelOther(e.target.value)
+                    setValidationWarning(null)
+                  }}
+                  placeholder="e.g., Primary school, Vocational certificate, Professional diploma..."
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-white text-slate-900 text-xs sm:text-sm"
+                  maxLength={100}
+                  autoFocus
+                />
+              </div>
+            )}
           </div>
 
           {/* Q4: Outside Program Participation */}
@@ -666,7 +794,11 @@ export const PublicSurveyView: React.FC<PublicSurveyViewProps> = ({ onNavigateHo
               </label>
               <select
                 value={hardSkillFirst}
-                onChange={(e) => setHardSkillFirst(e.target.value)}
+                onChange={(e) => {
+                  setHardSkillFirst(e.target.value)
+                  if (e.target.value !== 'Other') setHardSkillFirstOther('')
+                  setValidationWarning(null)
+                }}
                 className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-white text-slate-900 text-xs sm:text-sm"
               >
                 <option value="">-- Choose 1st Preference --</option>
@@ -676,6 +808,22 @@ export const PublicSurveyView: React.FC<PublicSurveyViewProps> = ({ onNavigateHo
                   </option>
                 ))}
               </select>
+              {hardSkillFirst === 'Other' && (
+                <div className="pt-1 animate-in fade-in-50 duration-200">
+                  <input
+                    type="text"
+                    value={hardSkillFirstOther}
+                    onChange={(e) => {
+                      setHardSkillFirstOther(e.target.value)
+                      setValidationWarning(null)
+                    }}
+                    placeholder="Please specify your 1st preferred skill (e.g. Solar Installation, Plumbing...)"
+                    className="w-full px-3.5 py-2 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-white text-slate-900 text-xs sm:text-sm"
+                    maxLength={100}
+                    autoFocus
+                  />
+                </div>
+              )}
             </div>
 
             {/* 5b. Second Choice */}
@@ -685,7 +833,11 @@ export const PublicSurveyView: React.FC<PublicSurveyViewProps> = ({ onNavigateHo
               </label>
               <select
                 value={hardSkillSecond}
-                onChange={(e) => setHardSkillSecond(e.target.value)}
+                onChange={(e) => {
+                  setHardSkillSecond(e.target.value)
+                  if (e.target.value !== 'Other') setHardSkillSecondOther('')
+                  setValidationWarning(null)
+                }}
                 className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-white text-slate-900 text-xs sm:text-sm"
               >
                 <option value="">-- Choose 2nd Preference --</option>
@@ -695,6 +847,22 @@ export const PublicSurveyView: React.FC<PublicSurveyViewProps> = ({ onNavigateHo
                   </option>
                 ))}
               </select>
+              {hardSkillSecond === 'Other' && (
+                <div className="pt-1 animate-in fade-in-50 duration-200">
+                  <input
+                    type="text"
+                    value={hardSkillSecondOther}
+                    onChange={(e) => {
+                      setHardSkillSecondOther(e.target.value)
+                      setValidationWarning(null)
+                    }}
+                    placeholder="Please specify your 2nd preferred skill (e.g. Solar Installation, Plumbing...)"
+                    className="w-full px-3.5 py-2 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-white text-slate-900 text-xs sm:text-sm"
+                    maxLength={100}
+                    autoFocus
+                  />
+                </div>
+              )}
             </div>
 
             {/* 5c. Third Choice */}
@@ -704,7 +872,11 @@ export const PublicSurveyView: React.FC<PublicSurveyViewProps> = ({ onNavigateHo
               </label>
               <select
                 value={hardSkillThird}
-                onChange={(e) => setHardSkillThird(e.target.value)}
+                onChange={(e) => {
+                  setHardSkillThird(e.target.value)
+                  if (e.target.value !== 'Other') setHardSkillThirdOther('')
+                  setValidationWarning(null)
+                }}
                 className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-white text-slate-900 text-xs sm:text-sm"
               >
                 <option value="">-- Choose 3rd Preference --</option>
@@ -714,15 +886,31 @@ export const PublicSurveyView: React.FC<PublicSurveyViewProps> = ({ onNavigateHo
                   </option>
                 ))}
               </select>
+              {hardSkillThird === 'Other' && (
+                <div className="pt-1 animate-in fade-in-50 duration-200">
+                  <input
+                    type="text"
+                    value={hardSkillThirdOther}
+                    onChange={(e) => {
+                      setHardSkillThirdOther(e.target.value)
+                      setValidationWarning(null)
+                    }}
+                    placeholder="Please specify your 3rd preferred skill (e.g. Solar Installation, Plumbing...)"
+                    className="w-full px-3.5 py-2 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-white text-slate-900 text-xs sm:text-sm"
+                    maxLength={100}
+                    autoFocus
+                  />
+                </div>
+              )}
             </div>
 
             {/* Distinct Hard Skills Invariant Alert */}
             {hardSkillFirst &&
               hardSkillSecond &&
               hardSkillThird &&
-              (hardSkillFirst === hardSkillSecond ||
-                hardSkillFirst === hardSkillThird ||
-                hardSkillSecond === hardSkillThird) && (
+              (getResolvedHardFirst() === getResolvedHardSecond() ||
+                getResolvedHardFirst() === getResolvedHardThird() ||
+                getResolvedHardSecond() === getResolvedHardThird()) && (
                 <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-xs text-red-700 font-medium flex items-center space-x-2">
                   <AlertCircle className="w-4 h-4 flex-shrink-0 text-red-600" />
                   <span>Please select three different skills for your first, second, and third preferences.</span>
@@ -768,6 +956,26 @@ export const PublicSurveyView: React.FC<PublicSurveyViewProps> = ({ onNavigateHo
                 )
               })}
             </div>
+
+            {softSkills.includes('Other') && (
+              <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-1.5 animate-in fade-in-50 duration-200">
+                <label className="block text-xs font-semibold text-slate-800">
+                  Please specify the other soft skill you would like to develop <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  value={softSkillsOther}
+                  onChange={(e) => {
+                    setSoftSkillsOther(e.target.value)
+                    setValidationWarning(null)
+                  }}
+                  placeholder="e.g., Negotiation, Conflict Resolution, Active Listening..."
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-white text-slate-900 text-xs sm:text-sm"
+                  maxLength={100}
+                  autoFocus
+                />
+              </div>
+            )}
           </div>
 
           {/* Question 7 — Self-Reliance Classes (Single-select) */}
@@ -873,6 +1081,26 @@ export const PublicSurveyView: React.FC<PublicSurveyViewProps> = ({ onNavigateHo
                 )
               })}
             </div>
+
+            {desiredOutcomes.includes('Other') && (
+              <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-1.5 animate-in fade-in-50 duration-200">
+                <label className="block text-xs font-semibold text-slate-800">
+                  Please specify your other goal or expected outcome <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  value={desiredOutcomesOther}
+                  onChange={(e) => {
+                    setDesiredOutcomesOther(e.target.value)
+                    setValidationWarning(null)
+                  }}
+                  placeholder="e.g., Prepare for missionary service, Mentorship connection..."
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-white text-slate-900 text-xs sm:text-sm"
+                  maxLength={100}
+                  autoFocus
+                />
+              </div>
+            )}
           </div>
 
           {/* Question 9 — Experience Level */}
@@ -1135,11 +1363,11 @@ export const PublicSurveyView: React.FC<PublicSurveyViewProps> = ({ onNavigateHo
             </div>
             <div className="p-4 flex flex-col sm:flex-row sm:justify-between gap-1">
               <span className="font-semibold text-slate-500">Current Status:</span>
-              <span className="font-medium text-slate-800">{currentStatus}</span>
+              <span className="font-medium text-slate-800">{getResolvedStatus()}</span>
             </div>
             <div className="p-4 bg-slate-50/50 flex flex-col sm:flex-row sm:justify-between gap-1">
               <span className="font-semibold text-slate-500">Highest Education:</span>
-              <span className="font-medium text-slate-800">{educationLevel}</span>
+              <span className="font-medium text-slate-800">{getResolvedEducation()}</span>
             </div>
             <div className="p-4 flex flex-col sm:flex-row sm:justify-between gap-1">
               <span className="font-semibold text-slate-500">Outside Programs:</span>
@@ -1151,13 +1379,13 @@ export const PublicSurveyView: React.FC<PublicSurveyViewProps> = ({ onNavigateHo
               <span className="font-bold text-emerald-950 block">Ranked Practical Skills:</span>
               <ol className="list-decimal list-inside space-y-1 text-slate-800 pl-1">
                 <li>
-                  <strong>1st Preference:</strong> {hardSkillFirst}
+                  <strong>1st Preference:</strong> {getResolvedHardFirst()}
                 </li>
                 <li>
-                  <strong>2nd Preference:</strong> {hardSkillSecond}
+                  <strong>2nd Preference:</strong> {getResolvedHardSecond()}
                 </li>
                 <li>
-                  <strong>3rd Preference:</strong> {hardSkillThird}
+                  <strong>3rd Preference:</strong> {getResolvedHardThird()}
                 </li>
               </ol>
             </div>
@@ -1165,7 +1393,7 @@ export const PublicSurveyView: React.FC<PublicSurveyViewProps> = ({ onNavigateHo
             {/* Soft Skills & Self-Reliance */}
             <div className="p-4 flex flex-col sm:flex-row sm:justify-between gap-1">
               <span className="font-semibold text-slate-500">Soft Skills:</span>
-              <span className="font-medium text-slate-800">{softSkills.join(', ')}</span>
+              <span className="font-medium text-slate-800">{getResolvedSoftSkills().join(', ')}</span>
             </div>
             <div className="p-4 bg-slate-50/50 flex flex-col sm:flex-row sm:justify-between gap-1">
               <span className="font-semibold text-slate-500">Self-Reliance Class:</span>
@@ -1175,7 +1403,7 @@ export const PublicSurveyView: React.FC<PublicSurveyViewProps> = ({ onNavigateHo
             {/* Goals & Experience */}
             <div className="p-4 flex flex-col sm:flex-row sm:justify-between gap-1">
               <span className="font-semibold text-slate-500">Desired Outcomes:</span>
-              <span className="font-medium text-slate-800">{desiredOutcomes.join(', ')}</span>
+              <span className="font-medium text-slate-800">{getResolvedDesiredOutcomes().join(', ')}</span>
             </div>
             <div className="p-4 bg-slate-50/50 flex flex-col sm:flex-row sm:justify-between gap-1">
               <span className="font-semibold text-slate-500">Experience Level:</span>

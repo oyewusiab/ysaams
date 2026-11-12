@@ -93,8 +93,20 @@ export const GatheringPlaceLeadershipView: React.FC<GatheringPlaceLeadershipView
   const filteredResponses = useMemo(() => {
     return allResponses.filter((r) => {
       if (wardFilter !== 'all' && r.wardBranch !== wardFilter) return false
-      if (statusFilter !== 'all' && r.currentStatus !== statusFilter) return false
-      if (educationFilter !== 'all' && r.educationLevel !== educationFilter) return false
+      if (statusFilter !== 'all') {
+        if (statusFilter === 'Other') {
+          if (!r.currentStatus.startsWith('Other')) return false
+        } else if (r.currentStatus !== statusFilter) {
+          return false
+        }
+      }
+      if (educationFilter !== 'all') {
+        if (educationFilter === 'Other') {
+          if (!r.educationLevel.startsWith('Other')) return false
+        } else if (r.educationLevel !== educationFilter) {
+          return false
+        }
+      }
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase().trim()
         const matches =
@@ -104,6 +116,8 @@ export const GatheringPlaceLeadershipView: React.FC<GatheringPlaceLeadershipView
           r.hardSkillFirstChoice.toLowerCase().includes(q) ||
           r.hardSkillSecondChoice.toLowerCase().includes(q) ||
           r.hardSkillThirdChoice.toLowerCase().includes(q) ||
+          (r.softSkills || []).some((s) => s.toLowerCase().includes(q)) ||
+          (r.desiredOutcomes || []).some((g) => g.toLowerCase().includes(q)) ||
           (r.desired56MonthOutcome && r.desired56MonthOutcome.toLowerCase().includes(q)) ||
           (r.additionalSkillsSuggestions && r.additionalSkillsSuggestions.toLowerCase().includes(q)) ||
           (r.gatheringPlaceSuggestions && r.gatheringPlaceSuggestions.toLowerCase().includes(q))

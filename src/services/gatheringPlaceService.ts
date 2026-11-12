@@ -353,10 +353,18 @@ export const gatheringPlaceService = {
       query = query.eq('ward_branch', filters.wardBranch)
     }
     if (filters?.currentStatus && filters.currentStatus !== 'all') {
-      query = query.eq('current_status', filters.currentStatus)
+      if (filters.currentStatus === 'Other') {
+        query = query.ilike('current_status', 'Other%')
+      } else {
+        query = query.eq('current_status', filters.currentStatus)
+      }
     }
     if (filters?.educationLevel && filters.educationLevel !== 'all') {
-      query = query.eq('education_level', filters.educationLevel)
+      if (filters.educationLevel === 'Other') {
+        query = query.ilike('education_level', 'Other%')
+      } else {
+        query = query.eq('education_level', filters.educationLevel)
+      }
     }
 
     const { data, error } = await query
@@ -395,9 +403,12 @@ export const gatheringPlaceService = {
         (r) =>
           r.wardBranch.toLowerCase().includes(q) ||
           r.currentStatus.toLowerCase().includes(q) ||
+          r.educationLevel.toLowerCase().includes(q) ||
           r.hardSkillFirstChoice.toLowerCase().includes(q) ||
           r.hardSkillSecondChoice.toLowerCase().includes(q) ||
           r.hardSkillThirdChoice.toLowerCase().includes(q) ||
+          (r.softSkills || []).some((s) => s.toLowerCase().includes(q)) ||
+          (r.desiredOutcomes || []).some((g) => g.toLowerCase().includes(q)) ||
           (r.desired56MonthOutcome && r.desired56MonthOutcome.toLowerCase().includes(q)) ||
           (r.additionalSkillsSuggestions && r.additionalSkillsSuggestions.toLowerCase().includes(q)) ||
           (r.gatheringPlaceSuggestions && r.gatheringPlaceSuggestions.toLowerCase().includes(q))
@@ -412,6 +423,15 @@ export const gatheringPlaceService = {
    */
   computeAnalytics(responses: GatheringPlaceResponse[]): GatheringPlaceAnalytics {
     const total = responses.length
+
+    const normalizeOther = (val?: string | null): string => {
+      if (!val) return ''
+      const trimmed = val.trim()
+      if (trimmed === 'Other' || trimmed.startsWith('Other:') || trimmed.startsWith('Other (')) {
+        return 'Other'
+      }
+      return trimmed
+    }
 
     // Participating Wards/Branches
     const participatingUnits = new Set(responses.map((r) => r.wardBranch))
@@ -432,22 +452,22 @@ export const gatheringPlaceService = {
     }
 
     for (const r of responses) {
-      if (r.hardSkillFirstChoice) {
-        firstChoiceCounts[r.hardSkillFirstChoice] = (firstChoiceCounts[r.hardSkillFirstChoice] || 0) + 1
+      const h1 = normalizeOther(r.hardSkillFirstChoice)
+      const h2 = normalizeOther(r.hardSkillSecondChoice)
+      const h3 = normalizeOther(r.hardSkillThirdChoice)
+
+      if (h1) {
+        firstChoiceCounts[h1] = (firstChoiceCounts[h1] || 0) + 1
       }
-      if (r.hardSkillSecondChoice) {
-        secondChoiceCounts[r.hardSkillSecondChoice] = (secondChoiceCounts[r.hardSkillSecondChoice] || 0) + 1
+      if (h2) {
+        secondChoiceCounts[h2] = (secondChoiceCounts[h2] || 0) + 1
       }
-      if (r.hardSkillThirdChoice) {
-        thirdChoiceCounts[r.hardSkillThirdChoice] = (thirdChoiceCounts[r.hardSkillThirdChoice] || 0) + 1
+      if (h3) {
+        thirdChoiceCounts[h3] = (thirdChoiceCounts[h3] || 0) + 1
       }
 
       // Overall: Distinct set of skills for this respondent
-      const respondentSkills = new Set([
-        r.hardSkillFirstChoice,
-        r.hardSkillSecondChoice,
-        r.hardSkillThirdChoice
-      ].filter(Boolean))
+      const respondentSkills = new Set([h1, h2, h3].filter(Boolean))
 
       for (const skill of respondentSkills) {
         overallCounts[skill] = (overallCounts[skill] || 0) + 1
@@ -478,7 +498,8 @@ export const gatheringPlaceService = {
 
     for (const r of responses) {
       for (const s of r.softSkills || []) {
-        softCounts[s] = (softCounts[s] || 0) + 1
+        const key = normalizeOther(s)
+        softCounts[key] = (softCounts[key] || 0) + 1
       }
     }
 
@@ -522,7 +543,8 @@ export const gatheringPlaceService = {
 
     for (const r of responses) {
       for (const g of r.desiredOutcomes || []) {
-        goalCounts[g] = (goalCounts[g] || 0) + 1
+        const key = normalizeOther(g)
+        goalCounts[key] = (goalCounts[key] || 0) + 1
       }
     }
 
@@ -553,7 +575,8 @@ export const gatheringPlaceService = {
     for (const opt of CURRENT_STATUS_OPTIONS) statusCounts[opt] = 0
     for (const r of responses) {
       if (r.currentStatus) {
-        statusCounts[r.currentStatus] = (statusCounts[r.currentStatus] || 0) + 1
+        const key = normalizeOther(r.currentStatus)
+        statusCounts[key] = (statusCounts[key] || 0) + 1
       }
     }
     const statusDistribution: FrequencyItem[] = Object.keys(statusCounts).map((label) => ({
@@ -566,7 +589,8 @@ export const gatheringPlaceService = {
     for (const opt of EDUCATION_LEVEL_OPTIONS) eduCounts[opt] = 0
     for (const r of responses) {
       if (r.educationLevel) {
-        eduCounts[r.educationLevel] = (eduCounts[r.educationLevel] || 0) + 1
+        const key = normalizeOther(r.educationLevel)
+        eduCounts[key] = (eduCounts[key] || 0) + 1
       }
     }
     const educationDistribution: FrequencyItem[] = Object.keys(eduCounts).map((label) => ({
@@ -671,9 +695,12 @@ export const gatheringPlaceService = {
       // Top hard skill in this unit
       const uSkills: Record<string, number> = {}
       for (const ur of unitResponses) {
-        if (ur.hardSkillFirstChoice) uSkills[ur.hardSkillFirstChoice] = (uSkills[ur.hardSkillFirstChoice] || 0) + 2
-        if (ur.hardSkillSecondChoice) uSkills[ur.hardSkillSecondChoice] = (uSkills[ur.hardSkillSecondChoice] || 0) + 1
-        if (ur.hardSkillThirdChoice) uSkills[ur.hardSkillThirdChoice] = (uSkills[ur.hardSkillThirdChoice] || 0) + 1
+        const h1 = normalizeOther(ur.hardSkillFirstChoice)
+        const h2 = normalizeOther(ur.hardSkillSecondChoice)
+        const h3 = normalizeOther(ur.hardSkillThirdChoice)
+        if (h1) uSkills[h1] = (uSkills[h1] || 0) + 2
+        if (h2) uSkills[h2] = (uSkills[h2] || 0) + 1
+        if (h3) uSkills[h3] = (uSkills[h3] || 0) + 1
       }
       const topSkillEntry = Object.entries(uSkills).sort((a, b) => b[1] - a[1])[0]
 
@@ -681,7 +708,8 @@ export const gatheringPlaceService = {
       const uSoft: Record<string, number> = {}
       for (const ur of unitResponses) {
         for (const s of ur.softSkills || []) {
-          uSoft[s] = (uSoft[s] || 0) + 1
+          const key = normalizeOther(s)
+          uSoft[key] = (uSoft[key] || 0) + 1
         }
       }
       const topSoftEntry = Object.entries(uSoft).sort((a, b) => b[1] - a[1])[0]
