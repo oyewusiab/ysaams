@@ -22,6 +22,8 @@ import {
   CURRENT_STATUS_OPTIONS,
   EDUCATION_LEVEL_OPTIONS,
   SELF_RELIANCE_PARTICIPATION_OPTIONS,
+  NON_PARTICIPATION_REASON_OPTIONS,
+  PARTICIPATION_MOTIVATION_OPTIONS,
   HARD_SKILLS_OPTIONS,
   SOFT_SKILLS_OPTIONS,
   SELF_RELIANCE_CLASS_OPTIONS,
@@ -52,6 +54,10 @@ describe('YSA Gathering Place — Needs Assessment & Analytics Module', () => {
     current_status: 'Student',
     education_level: "HND / Bachelor's degree",
     current_self_reliance_participation: 'No',
+    participation_non_participation_reason: 'The class schedule is not convenient',
+    participation_non_participation_reason_other: null,
+    participation_start_motivation: 'A convenient class schedule',
+    participation_start_motivation_other: null,
     hard_skill_first_choice: 'Graphic Design (Canva, Photoshop, etc.)',
     hard_skill_second_choice: 'Web Design & Development',
     hard_skill_third_choice: 'Data Analytics (Excel, Power BI, etc.)',
@@ -88,7 +94,12 @@ describe('YSA Gathering Place — Needs Assessment & Analytics Module', () => {
       expect(CURRENT_STATUS_OPTIONS).toHaveLength(6)
       expect(EDUCATION_LEVEL_OPTIONS).toHaveLength(6)
       expect(SELF_RELIANCE_PARTICIPATION_OPTIONS).toHaveLength(3)
-      expect(HARD_SKILLS_OPTIONS).toHaveLength(17)
+      expect(HARD_SKILLS_OPTIONS).toHaveLength(20)
+      expect(HARD_SKILLS_OPTIONS).toContain('Barbing')
+      expect(HARD_SKILLS_OPTIONS).toContain('Shoemaking')
+      expect(HARD_SKILLS_OPTIONS).toContain('Makeup')
+      expect(NON_PARTICIPATION_REASON_OPTIONS).toHaveLength(11)
+      expect(PARTICIPATION_MOTIVATION_OPTIONS).toHaveLength(11)
       expect(SOFT_SKILLS_OPTIONS).toHaveLength(11)
       expect(SELF_RELIANCE_CLASS_OPTIONS).toHaveLength(6)
       expect(GOALS_OPTIONS).toHaveLength(10)
@@ -101,6 +112,76 @@ describe('YSA Gathering Place — Needs Assessment & Analytics Module', () => {
       const res = validateSurveySubmission(validPayload)
       expect(res.valid).toBe(true)
       expect(res.error).toBeUndefined()
+    })
+
+    it('enforces conditional validation on Question 4a and 4b when Q4 is No or Past Participant', () => {
+      // Q4 = Yes does NOT require 4a or 4b
+      const yesPayload: GatheringPlaceSubmissionPayload = {
+        ...validPayload,
+        current_self_reliance_participation: 'Yes',
+        participation_non_participation_reason: null,
+        participation_start_motivation: null
+      }
+      expect(validateSurveySubmission(yesPayload).valid).toBe(true)
+
+      // Q4 = No without 4a reason fails
+      const noMissing4a: GatheringPlaceSubmissionPayload = {
+        ...validPayload,
+        current_self_reliance_participation: 'No',
+        participation_non_participation_reason: null
+      }
+      const resNo = validateSurveySubmission(noMissing4a)
+      expect(resNo.valid).toBe(false)
+      expect(resNo.error).toContain('Please specify the main reason you are not currently participating')
+
+      // Q4 = Past participant without 4b motivation fails
+      const pastMissing4b: GatheringPlaceSubmissionPayload = {
+        ...validPayload,
+        current_self_reliance_participation: 'I have participated in the past',
+        participation_start_motivation: null
+      }
+      const resPast = validateSurveySubmission(pastMissing4b)
+      expect(resPast.valid).toBe(false)
+      expect(resPast.error).toContain('Please specify what would motivate you to register and participate')
+
+      // 4a = Other requires text specification
+      const otherReasonMissingText: GatheringPlaceSubmissionPayload = {
+        ...validPayload,
+        participation_non_participation_reason: 'Other',
+        participation_non_participation_reason_other: '   '
+      }
+      expect(validateSurveySubmission(otherReasonMissingText).valid).toBe(false)
+
+      // 4b = Other requires text specification
+      const otherMotivationMissingText: GatheringPlaceSubmissionPayload = {
+        ...validPayload,
+        participation_start_motivation: 'Other',
+        participation_start_motivation_other: '   '
+      }
+      expect(validateSurveySubmission(otherMotivationMissingText).valid).toBe(false)
+    })
+
+    it('allows selecting the new hard skills (Barbing, Shoemaking, Makeup) with distinctness enforcement', () => {
+      const newSkillsPayload: GatheringPlaceSubmissionPayload = {
+        ...validPayload,
+        hard_skill_first_choice: 'Barbing',
+        hard_skill_second_choice: 'Shoemaking',
+        hard_skill_third_choice: 'Makeup'
+      }
+      expect(validateSurveySubmission(newSkillsPayload).valid).toBe(true)
+
+      // Duplicate new skill must still fail
+      const duplicateNewSkill: GatheringPlaceSubmissionPayload = {
+        ...validPayload,
+        hard_skill_first_choice: 'Barbing',
+        hard_skill_second_choice: 'Barbing',
+        hard_skill_third_choice: 'Makeup'
+      }
+      const res = validateSurveySubmission(duplicateNewSkill)
+      expect(res.valid).toBe(false)
+      expect(res.error).toBe(
+        'Please select three different skills for your first, second, and third preferences.'
+      )
     })
 
     it('enforces CRITICAL VALIDATION: First, second, and third hard skills must be DISTINCT', () => {
@@ -247,6 +328,10 @@ describe('YSA Gathering Place — Needs Assessment & Analytics Module', () => {
         currentStatus: 'Student',
         educationLevel: "HND / Bachelor's degree",
         currentSelfRelianceParticipation: 'No',
+        participationNonParticipationReason: 'The class schedule is not convenient',
+        participationNonParticipationReasonOther: null,
+        participationStartMotivation: 'A convenient class schedule',
+        participationStartMotivationOther: null,
         hardSkillFirstChoice: 'Graphic Design (Canva, Photoshop, etc.)',
         hardSkillSecondChoice: 'Web Design & Development',
         hardSkillThirdChoice: 'Data Analytics (Excel, Power BI, etc.)',
@@ -268,6 +353,10 @@ describe('YSA Gathering Place — Needs Assessment & Analytics Module', () => {
         currentStatus: 'Employed',
         educationLevel: "HND / Bachelor's degree",
         currentSelfRelianceParticipation: 'Yes',
+        participationNonParticipationReason: null,
+        participationNonParticipationReasonOther: null,
+        participationStartMotivation: null,
+        participationStartMotivationOther: null,
         hardSkillFirstChoice: 'Web Design & Development',
         hardSkillSecondChoice: 'Artificial Intelligence (AI) & Digital Tools',
         hardSkillThirdChoice: 'Graphic Design (Canva, Photoshop, etc.)',
@@ -288,7 +377,11 @@ describe('YSA Gathering Place — Needs Assessment & Analytics Module', () => {
         wardBranch: 'Obantoko Ward',
         currentStatus: 'Currently seeking employment',
         educationLevel: 'Secondary school',
-        currentSelfRelianceParticipation: 'No',
+        currentSelfRelianceParticipation: 'I have participated in the past',
+        participationNonParticipationReason: 'Other: Lack of startup capital',
+        participationNonParticipationReasonOther: 'Lack of startup capital',
+        participationStartMotivation: 'Other: Free materials and starter kit',
+        participationStartMotivationOther: 'Free materials and starter kit',
         hardSkillFirstChoice: 'Catering, Baking & Food Processing',
         hardSkillSecondChoice: 'Graphic Design (Canva, Photoshop, etc.)',
         hardSkillThirdChoice: 'Fashion Design & Tailoring',
@@ -361,6 +454,38 @@ describe('YSA Gathering Place — Needs Assessment & Analytics Module', () => {
       expect(topSlot.timePeriod).toBe('Morning (8 AM – 12 PM)')
       expect(topSlot.score).toBe(3)
       expect(topSlot.rationale).toContain('3 respondents (100%) selected availability')
+    })
+
+    it('computes participation breakdown and conditional non-participation reasons & motivations exclusively for non-participants', () => {
+      const analytics = gatheringPlaceService.computeAnalytics(mockResponses)
+
+      // Breakdown of Question 4 (3 respondents: 1 No, 1 Yes, 1 Past participant)
+      expect(analytics.outsideParticipationDistribution).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ label: 'No', count: 1 }),
+          expect.objectContaining({ label: 'Yes', count: 1 }),
+          expect.objectContaining({ label: 'I have participated in the past', count: 1 })
+        ])
+      )
+
+      // Q4a & Q4b: only 2 non-participants (resp-1 and resp-3)
+      const scheduleReason = analytics.nonParticipationReasonsRanked.find(
+        (r) => r.label === 'The class schedule is not convenient'
+      )
+      expect(scheduleReason?.count).toBe(1)
+      expect(scheduleReason?.percentage).toBe(50) // 1 out of 2 non-participants
+
+      const otherReason = analytics.nonParticipationReasonsRanked.find(
+        (r) => r.label === 'Other'
+      )
+      expect(otherReason?.count).toBe(1)
+      expect(otherReason?.percentage).toBe(50)
+
+      expect(analytics.nonParticipationReasonsOtherList).toHaveLength(1)
+      expect(analytics.nonParticipationReasonsOtherList[0].text).toBe('Lack of startup capital')
+
+      expect(analytics.participationMotivationsOtherList).toHaveLength(1)
+      expect(analytics.participationMotivationsOtherList[0].text).toBe('Free materials and starter kit')
     })
 
     it('aggregates specified "Other: ..." responses into the canonical Other category for macro rankings', () => {

@@ -116,6 +116,11 @@ export const GatheringPlaceLeadershipView: React.FC<GatheringPlaceLeadershipView
           r.hardSkillFirstChoice.toLowerCase().includes(q) ||
           r.hardSkillSecondChoice.toLowerCase().includes(q) ||
           r.hardSkillThirdChoice.toLowerCase().includes(q) ||
+          (r.currentSelfRelianceParticipation && r.currentSelfRelianceParticipation.toLowerCase().includes(q)) ||
+          (r.participationNonParticipationReason && r.participationNonParticipationReason.toLowerCase().includes(q)) ||
+          (r.participationNonParticipationReasonOther && r.participationNonParticipationReasonOther.toLowerCase().includes(q)) ||
+          (r.participationStartMotivation && r.participationStartMotivation.toLowerCase().includes(q)) ||
+          (r.participationStartMotivationOther && r.participationStartMotivationOther.toLowerCase().includes(q)) ||
           (r.softSkills || []).some((s) => s.toLowerCase().includes(q)) ||
           (r.desiredOutcomes || []).some((g) => g.toLowerCase().includes(q)) ||
           (r.desired56MonthOutcome && r.desired56MonthOutcome.toLowerCase().includes(q)) ||
@@ -1000,6 +1005,173 @@ export const GatheringPlaceLeadershipView: React.FC<GatheringPlaceLeadershipView
               </div>
             </div>
           </div>
+
+          {/* 8.1 Gathering Place Participation Breakdown (Question 4) */}
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 sm:p-8 space-y-4">
+            <div className="pb-4 border-b border-slate-800">
+              <span className="text-xs font-mono font-semibold text-emerald-400 uppercase tracking-wider">
+                Current Involvement
+              </span>
+              <h3 className="text-lg font-bold text-white mt-0.5">
+                Gathering Place Skill Acquisition Participation
+              </h3>
+              <p className="text-xs text-slate-400">
+                Question 4: Are you currently participating in any skill acquisition program at the Gathering Place?
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              {analytics.outsideParticipationDistribution.map((part) => (
+                <div
+                  key={part.label}
+                  className="bg-slate-950 border border-slate-800 p-4 rounded-xl flex flex-col justify-between"
+                >
+                  <span className="text-xs text-slate-400 font-medium">{part.label}</span>
+                  <div className="my-2 flex items-baseline space-x-2">
+                    <span className="text-2xl font-bold text-white">{part.count}</span>
+                    <span className="text-xs font-mono text-emerald-400 font-semibold">({part.percentage}%)</span>
+                  </div>
+                  <div className="w-full bg-slate-900 h-2 rounded-full overflow-hidden">
+                    <div
+                      className="bg-emerald-500 h-full rounded-full transition-all duration-500"
+                      style={{ width: `${part.percentage}%` }}
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* 8.2 Reasons for Non-Participation (Question 4a) & 8.3 Motivation to Participate (Question 4b) */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* 8.2 Non-Participation Reasons */}
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-4">
+              <div className="pb-4 border-b border-slate-800">
+                <span className="text-xs font-mono font-semibold text-amber-400 uppercase tracking-wider">
+                  Question 4a • Non-Participants Only
+                </span>
+                <h3 className="text-base font-bold text-white mt-0.5">
+                  Main Reasons for Non-Participation
+                </h3>
+                <p className="text-xs text-slate-400">
+                  Exclusively captures responses from members who selected "No" or "I have participated in the past".
+                </p>
+              </div>
+
+              {analytics.nonParticipationReasonsRanked.length === 0 ? (
+                <p className="text-xs text-slate-500 py-4 text-center">No non-participation records submitted yet.</p>
+              ) : (
+                <div className="space-y-3">
+                  {analytics.nonParticipationReasonsRanked.map((item, idx) => {
+                    const maxCount = Math.max(1, analytics.nonParticipationReasonsRanked[0]?.count || 1)
+                    const w = Math.round((item.count / maxCount) * 100)
+                    return (
+                      <div key={item.label} className="space-y-1">
+                        <div className="flex justify-between items-start text-xs">
+                          <span className="font-medium text-slate-300 pr-2">
+                            <span className="font-mono text-slate-500 mr-1.5">#{idx + 1}</span>
+                            {item.label}
+                          </span>
+                          <span className="font-mono font-bold text-amber-400 shrink-0">
+                            {item.count} ({item.percentage}%)
+                          </span>
+                        </div>
+                        <div className="w-full bg-slate-950 h-2 rounded-full overflow-hidden border border-slate-800/80">
+                          <div
+                            className="bg-amber-500 h-full rounded-full transition-all duration-500"
+                            style={{ width: `${w}%` }}
+                          />
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+
+              {analytics.nonParticipationReasonsOtherList.length > 0 && (
+                <div className="pt-3 border-t border-slate-800">
+                  <h4 className="text-[11px] font-mono uppercase tracking-wider text-slate-400 mb-2 font-semibold">
+                    Custom Reasons Specified ({analytics.nonParticipationReasonsOtherList.length})
+                  </h4>
+                  <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+                    {analytics.nonParticipationReasonsOtherList.map((other) => (
+                      <div key={other.id} className="p-2.5 bg-slate-950 border border-slate-800/80 rounded-lg text-xs">
+                        <div className="flex justify-between text-[10px] text-slate-500 mb-0.5">
+                          <span className="text-amber-400 font-medium">{other.ward}</span>
+                          <span>{new Date(other.date).toLocaleDateString()}</span>
+                        </div>
+                        <p className="text-slate-300 italic">"{other.text}"</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* 8.3 Motivation to Participate */}
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-4">
+              <div className="pb-4 border-b border-slate-800">
+                <span className="text-xs font-mono font-semibold text-emerald-400 uppercase tracking-wider">
+                  Question 4b • Engagement Catalysts
+                </span>
+                <h3 className="text-base font-bold text-white mt-0.5">
+                  Motivations to Start Participating
+                </h3>
+                <p className="text-xs text-slate-400">
+                  What would encourage non-participants to register and attend upcoming Gathering Place programs.
+                </p>
+              </div>
+
+              {analytics.participationMotivationsRanked.length === 0 ? (
+                <p className="text-xs text-slate-500 py-4 text-center">No motivation records submitted yet.</p>
+              ) : (
+                <div className="space-y-3">
+                  {analytics.participationMotivationsRanked.map((item, idx) => {
+                    const maxCount = Math.max(1, analytics.participationMotivationsRanked[0]?.count || 1)
+                    const w = Math.round((item.count / maxCount) * 100)
+                    return (
+                      <div key={item.label} className="space-y-1">
+                        <div className="flex justify-between items-start text-xs">
+                          <span className="font-medium text-slate-300 pr-2">
+                            <span className="font-mono text-slate-500 mr-1.5">#{idx + 1}</span>
+                            {item.label}
+                          </span>
+                          <span className="font-mono font-bold text-emerald-400 shrink-0">
+                            {item.count} ({item.percentage}%)
+                          </span>
+                        </div>
+                        <div className="w-full bg-slate-950 h-2 rounded-full overflow-hidden border border-slate-800/80">
+                          <div
+                            className="bg-emerald-500 h-full rounded-full transition-all duration-500"
+                            style={{ width: `${w}%` }}
+                          />
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+
+              {analytics.participationMotivationsOtherList.length > 0 && (
+                <div className="pt-3 border-t border-slate-800">
+                  <h4 className="text-[11px] font-mono uppercase tracking-wider text-slate-400 mb-2 font-semibold">
+                    Custom Motivations Specified ({analytics.participationMotivationsOtherList.length})
+                  </h4>
+                  <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+                    {analytics.participationMotivationsOtherList.map((other) => (
+                      <div key={other.id} className="p-2.5 bg-slate-950 border border-slate-800/80 rounded-lg text-xs">
+                        <div className="flex justify-between text-[10px] text-slate-500 mb-0.5">
+                          <span className="text-emerald-400 font-medium">{other.ward}</span>
+                          <span>{new Date(other.date).toLocaleDateString()}</span>
+                        </div>
+                        <p className="text-slate-300 italic">"{other.text}"</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       )}
 
@@ -1041,6 +1213,9 @@ export const GatheringPlaceLeadershipView: React.FC<GatheringPlaceLeadershipView
                     <th className="py-2.5 px-3 font-semibold uppercase text-[10px] tracking-wider">Ward / Branch</th>
                     <th className="py-2.5 px-3 font-semibold uppercase text-[10px] tracking-wider">Status</th>
                     <th className="py-2.5 px-3 font-semibold uppercase text-[10px] tracking-wider">Education</th>
+                    <th className="py-2.5 px-3 font-semibold uppercase text-[10px] tracking-wider">Gathering Place Part.</th>
+                    <th className="py-2.5 px-3 font-semibold uppercase text-[10px] tracking-wider">Non-Part. Reason</th>
+                    <th className="py-2.5 px-3 font-semibold uppercase text-[10px] tracking-wider">Start Motivation</th>
                     <th className="py-2.5 px-3 font-semibold uppercase text-[10px] tracking-wider">1st Hard Skill</th>
                     <th className="py-2.5 px-3 font-semibold uppercase text-[10px] tracking-wider">2nd Hard Skill</th>
                     <th className="py-2.5 px-3 font-semibold uppercase text-[10px] tracking-wider">3rd Hard Skill</th>
@@ -1057,6 +1232,13 @@ export const GatheringPlaceLeadershipView: React.FC<GatheringPlaceLeadershipView
                       <td className="py-3 px-3 font-semibold text-white whitespace-nowrap">{r.wardBranch}</td>
                       <td className="py-3 px-3 text-slate-300">{r.currentStatus}</td>
                       <td className="py-3 px-3 text-slate-400">{r.educationLevel}</td>
+                      <td className="py-3 px-3 text-emerald-300 whitespace-nowrap">{r.currentSelfRelianceParticipation}</td>
+                      <td className="py-3 px-3 text-slate-300 max-w-xs truncate" title={r.participationNonParticipationReason || undefined}>
+                        {r.participationNonParticipationReason || '-'}
+                      </td>
+                      <td className="py-3 px-3 text-slate-300 max-w-xs truncate" title={r.participationStartMotivation || undefined}>
+                        {r.participationStartMotivation || '-'}
+                      </td>
                       <td className="py-3 px-3 font-semibold text-emerald-400">{r.hardSkillFirstChoice}</td>
                       <td className="py-3 px-3 text-slate-300">{r.hardSkillSecondChoice}</td>
                       <td className="py-3 px-3 text-slate-400">{r.hardSkillThirdChoice}</td>
@@ -1151,6 +1333,60 @@ export const GatheringPlaceLeadershipView: React.FC<GatheringPlaceLeadershipView
                       <span>{new Date(sg.date).toLocaleDateString()}</span>
                     </div>
                     <p className="text-xs text-slate-200 leading-relaxed italic">"{sg.text}"</p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Question 4a: Custom Non-Participation Reasons */}
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 sm:p-8">
+            <div className="pb-4 mb-4 border-b border-slate-800">
+              <span className="text-xs font-mono font-semibold text-amber-400 uppercase tracking-wider">
+                Question 4a • Custom Non-Participation Explanations
+              </span>
+              <h3 className="text-base font-bold text-white mt-0.5">
+                Specific Non-Participation Factors Specified ({analytics.nonParticipationReasonsOtherList.length})
+              </h3>
+            </div>
+            {analytics.nonParticipationReasonsOtherList.length === 0 ? (
+              <p className="text-xs text-slate-500 py-4">No custom explanations submitted for Question 4a.</p>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {analytics.nonParticipationReasonsOtherList.map((item) => (
+                  <div key={item.id} className="p-4 bg-slate-950 border border-slate-800 rounded-xl space-y-1">
+                    <div className="flex justify-between items-center text-[10px] text-slate-400">
+                      <span className="font-semibold text-amber-400">{item.ward}</span>
+                      <span>{new Date(item.date).toLocaleDateString()}</span>
+                    </div>
+                    <p className="text-xs text-slate-200 leading-relaxed italic">"{item.text}"</p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Question 4b: Custom Motivations */}
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 sm:p-8">
+            <div className="pb-4 mb-4 border-b border-slate-800">
+              <span className="text-xs font-mono font-semibold text-emerald-400 uppercase tracking-wider">
+                Question 4b • Custom Motivations to Participate
+              </span>
+              <h3 className="text-base font-bold text-white mt-0.5">
+                Specific Motivations Specified ({analytics.participationMotivationsOtherList.length})
+              </h3>
+            </div>
+            {analytics.participationMotivationsOtherList.length === 0 ? (
+              <p className="text-xs text-slate-500 py-4">No custom motivations submitted for Question 4b.</p>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {analytics.participationMotivationsOtherList.map((item) => (
+                  <div key={item.id} className="p-4 bg-slate-950 border border-slate-800 rounded-xl space-y-1">
+                    <div className="flex justify-between items-center text-[10px] text-slate-400">
+                      <span className="font-semibold text-emerald-400">{item.ward}</span>
+                      <span>{new Date(item.date).toLocaleDateString()}</span>
+                    </div>
+                    <p className="text-xs text-slate-200 leading-relaxed italic">"{item.text}"</p>
                   </div>
                 ))}
               </div>

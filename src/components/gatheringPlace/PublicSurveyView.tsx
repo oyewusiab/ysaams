@@ -22,6 +22,8 @@ import {
   CURRENT_STATUS_OPTIONS,
   EDUCATION_LEVEL_OPTIONS,
   SELF_RELIANCE_PARTICIPATION_OPTIONS,
+  NON_PARTICIPATION_REASON_OPTIONS,
+  PARTICIPATION_MOTIVATION_OPTIONS,
   HARD_SKILLS_OPTIONS,
   SOFT_SKILLS_OPTIONS,
   SELF_RELIANCE_CLASS_OPTIONS,
@@ -49,6 +51,12 @@ export const PublicSurveyView: React.FC<PublicSurveyViewProps> = ({ onNavigateHo
   const [educationLevel, setEducationLevel] = useState<string>('')
   const [educationLevelOther, setEducationLevelOther] = useState<string>('')
   const [currentSelfReliance, setCurrentSelfReliance] = useState<string>('')
+
+  // Conditional Question 4a & 4b State
+  const [nonParticipationReason, setNonParticipationReason] = useState<string>('')
+  const [nonParticipationReasonOther, setNonParticipationReasonOther] = useState<string>('')
+  const [participationMotivation, setParticipationMotivation] = useState<string>('')
+  const [participationMotivationOther, setParticipationMotivationOther] = useState<string>('')
 
   // Ranked Hard Skills (Distinct)
   const [hardSkillFirst, setHardSkillFirst] = useState<string>('')
@@ -192,6 +200,16 @@ export const PublicSurveyView: React.FC<PublicSurveyViewProps> = ({ onNavigateHo
       g === 'Other' && desiredOutcomesOther.trim() ? `Other: ${desiredOutcomesOther.trim()}` : g
     )
 
+  const getResolvedNonParticipationReason = (): string =>
+    nonParticipationReason === 'Other' && nonParticipationReasonOther.trim()
+      ? `Other: ${nonParticipationReasonOther.trim()}`
+      : nonParticipationReason
+
+  const getResolvedParticipationMotivation = (): string =>
+    participationMotivation === 'Other' && participationMotivationOther.trim()
+      ? `Other: ${participationMotivationOther.trim()}`
+      : participationMotivation
+
   // Section Validation Helpers
   const validateSectionAbout = (): boolean => {
     if (!wardBranch) {
@@ -215,8 +233,26 @@ export const PublicSurveyView: React.FC<PublicSurveyViewProps> = ({ onNavigateHo
       return false
     }
     if (!currentSelfReliance) {
-      setValidationWarning('Please answer whether you participate in any skill or Self-Reliance program.')
+      setValidationWarning('Please answer whether you are currently participating in any skill acquisition program at the Gathering Place.')
       return false
+    }
+    if (currentSelfReliance !== 'Yes') {
+      if (!nonParticipationReason) {
+        setValidationWarning('Please select the main reason for non-participation (Question 4a).')
+        return false
+      }
+      if (nonParticipationReason === 'Other' && !nonParticipationReasonOther.trim()) {
+        setValidationWarning('Please specify your reason for non-participation in Question 4a.')
+        return false
+      }
+      if (!participationMotivation) {
+        setValidationWarning('Please select what would motivate you to participate (Question 4b).')
+        return false
+      }
+      if (participationMotivation === 'Other' && !participationMotivationOther.trim()) {
+        setValidationWarning('Please specify what would motivate you to participate in Question 4b.')
+        return false
+      }
     }
     setValidationWarning(null)
     return true
@@ -309,6 +345,18 @@ export const PublicSurveyView: React.FC<PublicSurveyViewProps> = ({ onNavigateHo
       current_status: getResolvedStatus(),
       education_level: getResolvedEducation(),
       current_self_reliance_participation: currentSelfReliance,
+      participation_non_participation_reason:
+        currentSelfReliance !== 'Yes' ? getResolvedNonParticipationReason() : null,
+      participation_non_participation_reason_other:
+        currentSelfReliance !== 'Yes' && nonParticipationReason === 'Other'
+          ? nonParticipationReasonOther.trim()
+          : null,
+      participation_start_motivation:
+        currentSelfReliance !== 'Yes' ? getResolvedParticipationMotivation() : null,
+      participation_start_motivation_other:
+        currentSelfReliance !== 'Yes' && participationMotivation === 'Other'
+          ? participationMotivationOther.trim()
+          : null,
       hard_skill_first_choice: getResolvedHardFirst(),
       hard_skill_second_choice: getResolvedHardSecond(),
       hard_skill_third_choice: getResolvedHardThird(),
@@ -349,6 +397,10 @@ export const PublicSurveyView: React.FC<PublicSurveyViewProps> = ({ onNavigateHo
     setEducationLevel('')
     setEducationLevelOther('')
     setCurrentSelfReliance('')
+    setNonParticipationReason('')
+    setNonParticipationReasonOther('')
+    setParticipationMotivation('')
+    setParticipationMotivationOther('')
     setHardSkillFirst('')
     setHardSkillFirstOther('')
     setHardSkillSecond('')
@@ -711,10 +763,10 @@ export const PublicSurveyView: React.FC<PublicSurveyViewProps> = ({ onNavigateHo
             )}
           </div>
 
-          {/* Q4: Outside Program Participation */}
+          {/* Q4: Gathering Place Participation */}
           <div className="space-y-3">
             <label className="block text-sm font-bold text-slate-900">
-              4. Are you currently participating in any skill acquisition or Self-Reliance program outside the Gathering Place?{' '}
+              4. Are you currently participating in any skill acquisition program at the Gathering Place?{' '}
               <span className="text-red-500">*</span>
             </label>
             <div className="space-y-2">
@@ -732,7 +784,16 @@ export const PublicSurveyView: React.FC<PublicSurveyViewProps> = ({ onNavigateHo
                     name="currentSelfReliance"
                     value={opt}
                     checked={currentSelfReliance === opt}
-                    onChange={() => setCurrentSelfReliance(opt)}
+                    onChange={() => {
+                      setCurrentSelfReliance(opt)
+                      if (opt === 'Yes') {
+                        setNonParticipationReason('')
+                        setNonParticipationReasonOther('')
+                        setParticipationMotivation('')
+                        setParticipationMotivationOther('')
+                      }
+                      setValidationWarning(null)
+                    }}
                     className="w-4 h-4 text-emerald-600 focus:ring-emerald-500 mr-3"
                   />
                   <span>{opt}</span>
@@ -740,6 +801,128 @@ export const PublicSurveyView: React.FC<PublicSurveyViewProps> = ({ onNavigateHo
               ))}
             </div>
           </div>
+
+          {/* Conditional Q4a: Reason for Non-Participation */}
+          {(currentSelfReliance === 'No' || currentSelfReliance === 'I have participated in the past') && (
+            <div className="space-y-3 p-4 sm:p-5 bg-slate-50 border border-slate-200 rounded-2xl animate-in fade-in-50 duration-200">
+              <label className="block text-sm font-bold text-slate-900">
+                4a. If you are not currently participating, what is the main reason?{' '}
+                <span className="text-red-500">*</span>
+              </label>
+              <p className="text-xs text-slate-500">
+                Please select the single primary factor that currently prevents or delays your participation.
+              </p>
+              <div className="space-y-2 pt-1">
+                {NON_PARTICIPATION_REASON_OPTIONS.map((reason) => (
+                  <label
+                    key={reason}
+                    className={`flex items-start p-3 rounded-xl border cursor-pointer transition text-xs sm:text-sm ${
+                      nonParticipationReason === reason
+                        ? 'bg-emerald-50 border-emerald-500 text-emerald-900 font-medium'
+                        : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-100/60'
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="nonParticipationReason"
+                      value={reason}
+                      checked={nonParticipationReason === reason}
+                      onChange={() => {
+                        setNonParticipationReason(reason)
+                        if (reason !== 'Other') {
+                          setNonParticipationReasonOther('')
+                        }
+                        setValidationWarning(null)
+                      }}
+                      className="w-4 h-4 text-emerald-600 focus:ring-emerald-500 mr-3 mt-0.5 shrink-0"
+                    />
+                    <span>{reason}</span>
+                  </label>
+                ))}
+              </div>
+
+              {nonParticipationReason === 'Other' && (
+                <div className="pt-2 space-y-1.5 animate-in fade-in-50 duration-200">
+                  <label className="block text-xs font-semibold text-slate-800">
+                    Please specify your reason <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={nonParticipationReasonOther}
+                    onChange={(e) => {
+                      setNonParticipationReasonOther(e.target.value)
+                      setValidationWarning(null)
+                    }}
+                    placeholder="Enter your specific reason..."
+                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-white text-slate-900 text-xs sm:text-sm"
+                    maxLength={200}
+                    autoFocus
+                  />
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Conditional Q4b: Motivation to Participate */}
+          {(currentSelfReliance === 'No' || currentSelfReliance === 'I have participated in the past') && (
+            <div className="space-y-3 p-4 sm:p-5 bg-slate-50 border border-slate-200 rounded-2xl animate-in fade-in-50 duration-200">
+              <label className="block text-sm font-bold text-slate-900">
+                4b. What would motivate you to register and start participating in skill acquisition at the Gathering Place?{' '}
+                <span className="text-red-500">*</span>
+              </label>
+              <p className="text-xs text-slate-500">
+                Tell us what change or support would most encourage you to enroll in upcoming programs.
+              </p>
+              <div className="space-y-2 pt-1">
+                {PARTICIPATION_MOTIVATION_OPTIONS.map((motivation) => (
+                  <label
+                    key={motivation}
+                    className={`flex items-start p-3 rounded-xl border cursor-pointer transition text-xs sm:text-sm ${
+                      participationMotivation === motivation
+                        ? 'bg-emerald-50 border-emerald-500 text-emerald-900 font-medium'
+                        : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-100/60'
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="participationMotivation"
+                      value={motivation}
+                      checked={participationMotivation === motivation}
+                      onChange={() => {
+                        setParticipationMotivation(motivation)
+                        if (motivation !== 'Other') {
+                          setParticipationMotivationOther('')
+                        }
+                        setValidationWarning(null)
+                      }}
+                      className="w-4 h-4 text-emerald-600 focus:ring-emerald-500 mr-3 mt-0.5 shrink-0"
+                    />
+                    <span>{motivation}</span>
+                  </label>
+                ))}
+              </div>
+
+              {participationMotivation === 'Other' && (
+                <div className="pt-2 space-y-1.5 animate-in fade-in-50 duration-200">
+                  <label className="block text-xs font-semibold text-slate-800">
+                    Please specify what would motivate you <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={participationMotivationOther}
+                    onChange={(e) => {
+                      setParticipationMotivationOther(e.target.value)
+                      setValidationWarning(null)
+                    }}
+                    placeholder="Enter what would motivate you..."
+                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-white text-slate-900 text-xs sm:text-sm"
+                    maxLength={200}
+                    autoFocus
+                  />
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Navigation Buttons */}
           <div className="pt-6 border-t border-slate-100 flex justify-between items-center">
@@ -1370,9 +1553,21 @@ export const PublicSurveyView: React.FC<PublicSurveyViewProps> = ({ onNavigateHo
               <span className="font-medium text-slate-800">{getResolvedEducation()}</span>
             </div>
             <div className="p-4 flex flex-col sm:flex-row sm:justify-between gap-1">
-              <span className="font-semibold text-slate-500">Outside Programs:</span>
+              <span className="font-semibold text-slate-500">Gathering Place Participation:</span>
               <span className="font-medium text-slate-800">{currentSelfReliance}</span>
             </div>
+            {currentSelfReliance !== 'Yes' && (
+              <>
+                <div className="p-4 bg-slate-50/50 flex flex-col sm:flex-row sm:justify-between gap-1">
+                  <span className="font-semibold text-slate-500">Reason for Non-Participation:</span>
+                  <span className="font-medium text-slate-800">{getResolvedNonParticipationReason()}</span>
+                </div>
+                <div className="p-4 flex flex-col sm:flex-row sm:justify-between gap-1">
+                  <span className="font-semibold text-slate-500">Motivation to Participate:</span>
+                  <span className="font-medium text-slate-800">{getResolvedParticipationMotivation()}</span>
+                </div>
+              </>
+            )}
 
             {/* Ranked Practical Skills */}
             <div className="p-4 bg-emerald-50/40 space-y-1.5">

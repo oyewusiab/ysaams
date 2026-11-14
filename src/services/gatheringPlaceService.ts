@@ -22,6 +22,8 @@ import {
   CURRENT_STATUS_OPTIONS,
   EDUCATION_LEVEL_OPTIONS,
   SELF_RELIANCE_PARTICIPATION_OPTIONS,
+  NON_PARTICIPATION_REASON_OPTIONS,
+  PARTICIPATION_MOTIVATION_OPTIONS,
   SkillPreferenceItem,
   FrequencyItem,
   DayTimeMatrixCell,
@@ -51,7 +53,33 @@ export function validateSurveySubmission(payload: GatheringPlaceSubmissionPayloa
     return { valid: false, error: 'Please select your highest level of education.' }
   }
   if (!payload.current_self_reliance_participation || !payload.current_self_reliance_participation.trim()) {
-    return { valid: false, error: 'Please indicate your participation in skill or self-reliance programs.' }
+    return { valid: false, error: 'Please indicate whether you currently participate in skill acquisition at the Gathering Place.' }
+  }
+
+  // Question 4a & 4b Conditional validation (only when Q4 is 'No' or 'I have participated in the past')
+  const participationStatus = payload.current_self_reliance_participation.trim()
+  if (participationStatus === 'No' || participationStatus === 'I have participated in the past') {
+    if (!payload.participation_non_participation_reason || !payload.participation_non_participation_reason.trim()) {
+      return { valid: false, error: 'Please specify the main reason you are not currently participating.' }
+    }
+    const rReason = payload.participation_non_participation_reason.trim()
+    if (
+      rReason === 'Other' &&
+      (!payload.participation_non_participation_reason_other || !payload.participation_non_participation_reason_other.trim())
+    ) {
+      return { valid: false, error: 'Please specify your reason for not participating.' }
+    }
+
+    if (!payload.participation_start_motivation || !payload.participation_start_motivation.trim()) {
+      return { valid: false, error: 'Please specify what would motivate you to register and participate.' }
+    }
+    const rMotiv = payload.participation_start_motivation.trim()
+    if (
+      rMotiv === 'Other' &&
+      (!payload.participation_start_motivation_other || !payload.participation_start_motivation_other.trim())
+    ) {
+      return { valid: false, error: 'Please specify what would motivate you to participate.' }
+    }
   }
 
   // Question 5 — Ranked Hard Skills: Must be 3 distinct choices
@@ -293,12 +321,17 @@ export const gatheringPlaceService = {
     }
 
     // Fallback: Direct table INSERT (handled under policy_gp_responses_insert)
+    const isParticipating = payload.current_self_reliance_participation.trim() === 'Yes'
     const insertRecord = {
       assessment_id: payload.assessment_id,
       ward_branch: payload.ward_branch.trim(),
       current_status: payload.current_status.trim(),
       education_level: payload.education_level.trim(),
       current_self_reliance_participation: payload.current_self_reliance_participation.trim(),
+      participation_non_participation_reason: isParticipating ? null : (payload.participation_non_participation_reason?.trim() || null),
+      participation_non_participation_reason_other: isParticipating ? null : (payload.participation_non_participation_reason_other?.trim() || null),
+      participation_start_motivation: isParticipating ? null : (payload.participation_start_motivation?.trim() || null),
+      participation_start_motivation_other: isParticipating ? null : (payload.participation_start_motivation_other?.trim() || null),
       hard_skill_first_choice: payload.hard_skill_first_choice.trim(),
       hard_skill_second_choice: payload.hard_skill_second_choice.trim(),
       hard_skill_third_choice: payload.hard_skill_third_choice.trim(),
@@ -380,6 +413,10 @@ export const gatheringPlaceService = {
       currentStatus: row.current_status,
       educationLevel: row.education_level,
       currentSelfRelianceParticipation: row.current_self_reliance_participation,
+      participationNonParticipationReason: row.participation_non_participation_reason || null,
+      participationNonParticipationReasonOther: row.participation_non_participation_reason_other || null,
+      participationStartMotivation: row.participation_start_motivation || null,
+      participationStartMotivationOther: row.participation_start_motivation_other || null,
       hardSkillFirstChoice: row.hard_skill_first_choice,
       hardSkillSecondChoice: row.hard_skill_second_choice,
       hardSkillThirdChoice: row.hard_skill_third_choice,
@@ -407,6 +444,10 @@ export const gatheringPlaceService = {
           r.hardSkillFirstChoice.toLowerCase().includes(q) ||
           r.hardSkillSecondChoice.toLowerCase().includes(q) ||
           r.hardSkillThirdChoice.toLowerCase().includes(q) ||
+          (r.participationNonParticipationReason && r.participationNonParticipationReason.toLowerCase().includes(q)) ||
+          (r.participationNonParticipationReasonOther && r.participationNonParticipationReasonOther.toLowerCase().includes(q)) ||
+          (r.participationStartMotivation && r.participationStartMotivation.toLowerCase().includes(q)) ||
+          (r.participationStartMotivationOther && r.participationStartMotivationOther.toLowerCase().includes(q)) ||
           (r.softSkills || []).some((s) => s.toLowerCase().includes(q)) ||
           (r.desiredOutcomes || []).some((g) => g.toLowerCase().includes(q)) ||
           (r.desired56MonthOutcome && r.desired56MonthOutcome.toLowerCase().includes(q)) ||
@@ -613,6 +654,113 @@ export const gatheringPlaceService = {
       percentage: total > 0 ? Math.round((srPartCounts[label] / total) * 100) : 0
     }))
 
+    // 6b. Reasons for Non-Participation (Q4a) - Analyzed ONLY for respondents who selected 'No' or 'I have participated in the past'
+    const nonParticipants = responses.filter(
+      (r) =>
+        r.currentSelfRelianceParticipation === 'No' ||
+        r.currentSelfRelianceParticipation === 'I have participated in the past'
+    )
+    const nonPartTotal = nonParticipants.length
+
+    const reasonCounts: Record<string, number> = {}
+    for (const opt of NON_PARTICIPATION_REASON_OPTIONS) reasonCounts[opt] = 0
+
+    const nonParticipationReasonsOtherList: { id: string; ward: string; text: string; date: string }[] = []
+
+    for (const r of nonParticipants) {
+      if (r.participationNonParticipationReason) {
+        const key = normalizeOther(r.participationNonParticipationReason)
+        reasonCounts[key] = (reasonCounts[key] || 0) + 1
+      }
+      if (
+        r.participationNonParticipationReasonOther &&
+        r.participationNonParticipationReasonOther.trim()
+      ) {
+        nonParticipationReasonsOtherList.push({
+          id: r.id,
+          ward: r.wardBranch,
+          text: r.participationNonParticipationReasonOther.trim(),
+          date: r.submittedAt
+        })
+      } else if (
+        r.participationNonParticipationReason &&
+        (r.participationNonParticipationReason.startsWith('Other:') ||
+          r.participationNonParticipationReason.startsWith('Other ('))
+      ) {
+        const customText = r.participationNonParticipationReason
+          .replace(/^Other:\s*/, '')
+          .replace(/^Other\s*\(/, '')
+          .replace(/\)$/, '')
+          .trim()
+        if (customText) {
+          nonParticipationReasonsOtherList.push({
+            id: r.id,
+            ward: r.wardBranch,
+            text: customText,
+            date: r.submittedAt
+          })
+        }
+      }
+    }
+
+    const nonParticipationReasonsRanked: FrequencyItem[] = Object.keys(reasonCounts)
+      .map((label) => ({
+        label,
+        count: reasonCounts[label],
+        percentage: nonPartTotal > 0 ? Math.round((reasonCounts[label] / nonPartTotal) * 100) : 0
+      }))
+      .sort((a, b) => b.count - a.count)
+
+    // 6c. Motivation to Participate (Q4b) - Analyzed ONLY for respondents who selected 'No' or 'I have participated in the past'
+    const motivationCounts: Record<string, number> = {}
+    for (const opt of PARTICIPATION_MOTIVATION_OPTIONS) motivationCounts[opt] = 0
+
+    const participationMotivationsOtherList: { id: string; ward: string; text: string; date: string }[] = []
+
+    for (const r of nonParticipants) {
+      if (r.participationStartMotivation) {
+        const key = normalizeOther(r.participationStartMotivation)
+        motivationCounts[key] = (motivationCounts[key] || 0) + 1
+      }
+      if (
+        r.participationStartMotivationOther &&
+        r.participationStartMotivationOther.trim()
+      ) {
+        participationMotivationsOtherList.push({
+          id: r.id,
+          ward: r.wardBranch,
+          text: r.participationStartMotivationOther.trim(),
+          date: r.submittedAt
+        })
+      } else if (
+        r.participationStartMotivation &&
+        (r.participationStartMotivation.startsWith('Other:') ||
+          r.participationStartMotivation.startsWith('Other ('))
+      ) {
+        const customText = r.participationStartMotivation
+          .replace(/^Other:\s*/, '')
+          .replace(/^Other\s*\(/, '')
+          .replace(/\)$/, '')
+          .trim()
+        if (customText) {
+          participationMotivationsOtherList.push({
+            id: r.id,
+            ward: r.wardBranch,
+            text: customText,
+            date: r.submittedAt
+          })
+        }
+      }
+    }
+
+    const participationMotivationsRanked: FrequencyItem[] = Object.keys(motivationCounts)
+      .map((label) => ({
+        label,
+        count: motivationCounts[label],
+        percentage: nonPartTotal > 0 ? Math.round((motivationCounts[label] / nonPartTotal) * 100) : 0
+      }))
+      .sort((a, b) => b.count - a.count)
+
     // 7. Availability Demand & Heatmap
     const daysCounts: Record<string, number> = {}
     for (const d of DAYS_OPTIONS) daysCounts[d] = 0
@@ -796,6 +944,10 @@ export const gatheringPlaceService = {
       statusDistribution,
       educationDistribution,
       outsideParticipationDistribution,
+      nonParticipationReasonsRanked,
+      nonParticipationReasonsOtherList,
+      participationMotivationsRanked,
+      participationMotivationsOtherList,
       daysDemand,
       timePeriodsDemand,
       dayTimeMatrix,
@@ -822,7 +974,11 @@ export const gatheringPlaceService = {
       'Ward / Branch',
       'Current Status',
       'Education Level',
-      'Participating in Outside Programs',
+      'Currently Participating in Gathering Place',
+      'Non-Participation Reason (Q4a)',
+      'Non-Participation Reason Other',
+      'Motivation to Participate (Q4b)',
+      'Motivation to Participate Other',
       'First Choice Hard Skill',
       'Second Choice Hard Skill',
       'Third Choice Hard Skill',
@@ -847,6 +1003,10 @@ export const gatheringPlaceService = {
         sanitizeForSpreadsheet(r.currentStatus),
         sanitizeForSpreadsheet(r.educationLevel),
         sanitizeForSpreadsheet(r.currentSelfRelianceParticipation),
+        sanitizeForSpreadsheet(r.participationNonParticipationReason || ''),
+        sanitizeForSpreadsheet(r.participationNonParticipationReasonOther || ''),
+        sanitizeForSpreadsheet(r.participationStartMotivation || ''),
+        sanitizeForSpreadsheet(r.participationStartMotivationOther || ''),
         sanitizeForSpreadsheet(r.hardSkillFirstChoice),
         sanitizeForSpreadsheet(r.hardSkillSecondChoice),
         sanitizeForSpreadsheet(r.hardSkillThirdChoice),
@@ -909,7 +1069,11 @@ export const gatheringPlaceService = {
       'Ward / Branch',
       'Current Status',
       'Education Level',
-      'Outside Program Participation',
+      'Currently Participating in Gathering Place',
+      'Non-Participation Reason (Q4a)',
+      'Non-Participation Reason Other',
+      'Motivation to Participate (Q4b)',
+      'Motivation to Participate Other',
       'Hard Skill (1st Choice)',
       'Hard Skill (2nd Choice)',
       'Hard Skill (3rd Choice)',
@@ -939,6 +1103,10 @@ export const gatheringPlaceService = {
         { value: sanitizeForSpreadsheet(r.currentStatus) },
         { value: sanitizeForSpreadsheet(r.educationLevel) },
         { value: sanitizeForSpreadsheet(r.currentSelfRelianceParticipation) },
+        { value: sanitizeForSpreadsheet(r.participationNonParticipationReason || '') },
+        { value: sanitizeForSpreadsheet(r.participationNonParticipationReasonOther || '') },
+        { value: sanitizeForSpreadsheet(r.participationStartMotivation || '') },
+        { value: sanitizeForSpreadsheet(r.participationStartMotivationOther || '') },
         { value: sanitizeForSpreadsheet(r.hardSkillFirstChoice), fontWeight: 'bold' },
         { value: sanitizeForSpreadsheet(r.hardSkillSecondChoice) },
         { value: sanitizeForSpreadsheet(r.hardSkillThirdChoice) },

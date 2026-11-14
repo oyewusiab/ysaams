@@ -28,6 +28,10 @@ export interface GatheringPlaceResponse {
   currentStatus: string
   educationLevel: string
   currentSelfRelianceParticipation: string
+  participationNonParticipationReason?: string | null
+  participationNonParticipationReasonOther?: string | null
+  participationStartMotivation?: string | null
+  participationStartMotivationOther?: string | null
   hardSkillFirstChoice: string
   hardSkillSecondChoice: string
   hardSkillThirdChoice: string
@@ -50,6 +54,10 @@ export interface GatheringPlaceSubmissionPayload {
   current_status: string
   education_level: string
   current_self_reliance_participation: string
+  participation_non_participation_reason?: string | null
+  participation_non_participation_reason_other?: string | null
+  participation_start_motivation?: string | null
+  participation_start_motivation_other?: string | null
   hard_skill_first_choice: string
   hard_skill_second_choice: string
   hard_skill_third_choice: string
@@ -103,6 +111,34 @@ export const SELF_RELIANCE_PARTICIPATION_OPTIONS = [
   'I have participated in the past'
 ] as const
 
+export const NON_PARTICIPATION_REASON_OPTIONS = [
+  'I am not aware of the available programs',
+  'The skills offered do not interest me',
+  'The class schedule is not convenient',
+  'I have other commitments (work, school, family, etc.)',
+  'The location is not convenient',
+  'I cannot afford the required materials or fees',
+  'I do not have the necessary equipment or resources',
+  'I am waiting for a skill I am interested in',
+  'I have not had the opportunity to register',
+  'I am not ready to participate at the moment',
+  'Other'
+] as const
+
+export const PARTICIPATION_MOTIVATION_OPTIONS = [
+  'Introduction of skills that interest me',
+  'A convenient class schedule',
+  'Free or affordable training',
+  'Availability of necessary tools and equipment',
+  'Practical, hands-on training',
+  'Qualified and experienced instructors',
+  'Opportunity to earn income or start a business',
+  'Opportunity to gain employment',
+  'More information about the programs',
+  'Encouragement from YSA leaders and friends',
+  'Other'
+] as const
+
 export const HARD_SKILLS_OPTIONS = [
   'Computer Literacy & Microsoft Office',
   'Graphic Design (Canva, Photoshop, etc.)',
@@ -120,6 +156,9 @@ export const HARD_SKILLS_OPTIONS = [
   'Driving',
   'Business Management & Entrepreneurship',
   'Bookkeeping & Accounting',
+  'Barbing',
+  'Shoemaking',
+  'Makeup',
   'Other'
 ] as const
 
@@ -240,6 +279,10 @@ export interface GatheringPlaceAnalytics {
   statusDistribution: FrequencyItem[]
   educationDistribution: FrequencyItem[]
   outsideParticipationDistribution: FrequencyItem[]
+  nonParticipationReasonsRanked: FrequencyItem[]
+  nonParticipationReasonsOtherList: { id: string; ward: string; text: string; date: string }[]
+  participationMotivationsRanked: FrequencyItem[]
+  participationMotivationsOtherList: { id: string; ward: string; text: string; date: string }[]
   daysDemand: FrequencyItem[]
   timePeriodsDemand: FrequencyItem[]
   dayTimeMatrix: DayTimeMatrixCell[]
