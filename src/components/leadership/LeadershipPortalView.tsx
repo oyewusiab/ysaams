@@ -315,16 +315,20 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
           setManualSessionId(activeSessions[0].id)
         }
       } else if (currentSubpath === 'reports') {
-        const [uList, mList, actList, sList] = await Promise.all([
+        const [uList, mList, actList, sList, usrList] = await Promise.all([
           adminService.listUnits(),
           memberService.listMembers(unitFilter),
           activityService.listActivities(),
-          activityService.listSessions()
+          activityService.listSessions(),
+          adminService.listUsers().catch(() => [])
         ])
         setUnits(uList)
         setMembers(mList)
         setActivities(actList)
         setSessions(sList)
+        if (usrList && usrList.length > 0) {
+          setUsersList(usrList)
+        }
       } else if (currentSubpath === 'users') {
         if (isStakeLeader) {
           const [uList, userProfiles] = await Promise.all([
@@ -3487,6 +3491,7 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
             activities={activities}
             sessions={sessions}
             members={members}
+            usersList={usersList}
           />
         )}
 
@@ -3786,6 +3791,34 @@ export const LeadershipPortalView: React.FC<LeadershipPortalViewProps> = ({
                               {u.roles.map(r => (
                                 <span key={r} className="inline-flex items-center space-x-1 px-1.5 py-0.5 rounded bg-slate-800 text-[10px] text-emerald-400 border border-slate-700">
                                   <span>{r}</span>
+                                  {r === 'stake_presidency' && u.isStakePresident && (
+                                    <span className="ml-1 px-1 py-0.2 rounded bg-amber-500/30 text-amber-300 font-bold text-[9px] border border-amber-500/40">
+                                      President
+                                    </span>
+                                  )}
+                                  {isSystemAdmin && r === 'stake_presidency' && (
+                                    <button
+                                      type="button"
+                                      title={u.isStakePresident ? 'Remove Stake President designation' : 'Designate as Stake President'}
+                                      onClick={async () => {
+                                        try {
+                                          await adminService.setStakePresident(u.id, !u.isStakePresident)
+                                          await loadCurrentSubpathData()
+                                          setStatusMsg({
+                                            type: 'success',
+                                            text: u.isStakePresident
+                                              ? `Removed Stake President designation from ${u.fullName}.`
+                                              : `Designated ${u.fullName} as Stake President.`
+                                          })
+                                        } catch (err: any) {
+                                          setStatusMsg({ type: 'error', text: err?.message || 'Failed to update President designation' })
+                                        }
+                                      }}
+                                      className="text-amber-400 hover:text-amber-200 text-[9px] underline ml-1 cursor-pointer"
+                                    >
+                                      {u.isStakePresident ? 'unset' : 'set-pres'}
+                                    </button>
+                                  )}
                                   {isSystemAdmin && (
                                     <button
                                       type="button"

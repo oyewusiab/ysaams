@@ -181,7 +181,7 @@ export const adminService = {
         .order('created_at', { ascending: false }),
       supabase
         .from('user_roles')
-        .select('user_id, role_name'),
+        .select('user_id, role_name, is_stake_president'),
       supabase
         .from('user_unit_assignments')
         .select('id, user_id, unit_id, assigned_role, created_at, stake_units(unit_name)')
@@ -192,11 +192,15 @@ export const adminService = {
     if (assignmentsRes.error) throw new Error(assignmentsRes.error.message)
 
     const rolesByUser: Record<string, AppRole[]> = {}
+    const isPresidentByUser: Record<string, boolean> = {}
     for (const r of rolesRes.data || []) {
       if (!rolesByUser[r.user_id]) {
         rolesByUser[r.user_id] = []
       }
       rolesByUser[r.user_id].push(r.role_name as AppRole)
+      if (r.role_name === 'stake_presidency' && (r as any).is_stake_president) {
+        isPresidentByUser[r.user_id] = true
+      }
     }
 
     const assignmentsByUser: Record<string, UserUnitAssignment[]> = {}
@@ -222,6 +226,8 @@ export const adminService = {
         id: u.id,
         fullName: u.full_name,
         email: u.email,
+        phoneNumber: u.phone_number || null,
+        isStakePresident: Boolean(isPresidentByUser[u.id]),
         roles,
         unitAssignments,
         unitId: unitAssignments[0]?.unitId || null,
@@ -250,6 +256,23 @@ export const adminService = {
       .from('user_profiles')
       .update({ full_name: cleanName, updated_at: new Date().toISOString() })
       .eq('id', userId)
+
+    if (error) throw new Error(error.message)
+  },
+
+  async setStakePresident(userId: string, isPresident: boolean): Promise<void> {
+    if (isPresident) {
+      // First clear any previous stake president assignment
+      await supabase
+        .from('user_roles')
+        .update({ is_stake_president: false })
+        .eq('role_name', 'stake_presidency')
+    }
+    const { error } = await supabase
+      .from('user_roles')
+      .update({ is_stake_president: isPresident })
+      .eq('user_id', userId)
+      .eq('role_name', 'stake_presidency')
 
     if (error) throw new Error(error.message)
   },

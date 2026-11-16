@@ -43,12 +43,16 @@ import {
 import { formatLagosDateDisplay, formatLagosTimestampDisplay, getLagosDate } from '../../lib/timezone'
 import { humanizeErrorMessage } from '../../lib/errorUtils'
 import { VisualAnalyticsView } from './VisualAnalyticsView'
+import { GatheringPlaceMonthlyReportWorkspace } from './GatheringPlaceMonthlyReportWorkspace'
+import { UnitLeaderGatheringPlaceReportsView } from './UnitLeaderGatheringPlaceReportsView'
+import { UserProfile } from '../../types/database'
 
 interface ReportingWorkspaceProps {
   units: StakeUnit[]
   activities: ActivityDefinition[]
   sessions: ActivitySession[]
   members: MemberRecord[]
+  usersList?: UserProfile[]
 }
 
 const REPORT_TYPE_LABELS: Record<ReportType, string> = {
@@ -89,9 +93,19 @@ export const ReportingWorkspace: React.FC<ReportingWorkspaceProps> = ({
   units,
   activities,
   sessions: _sessions,
-  members
+  members,
+  usersList = []
 }) => {
-  const { hasStakeWideReadAccess, reportUnitFilter } = useAuth()
+  const {
+    hasStakeWideReadAccess,
+    reportUnitFilter,
+    canGenerateGatheringPlaceReport,
+    isUnitLeader
+  } = useAuth()
+
+  const [activeReportSection, setActiveReportSection] = useState<
+    'standard' | 'gathering_place'
+  >('standard')
 
   // Dynamically derive available activity categories from standard categories + activities prop
   const availableCategories = useMemo(() => {
@@ -451,18 +465,72 @@ export const ReportingWorkspace: React.FC<ReportingWorkspaceProps> = ({
 
   return (
     <div className="space-y-6">
-      {/* Printable Header - Visible only when printing */}
-      <div className="hidden print:block mb-6 border-b-2 border-slate-900 pb-4">
-        <h1 className="text-xl font-bold text-slate-900">Abeokuta Nigeria Obantoko Stake — YSA AMS</h1>
-        <h2 className="text-base font-semibold text-slate-800">{REPORT_TYPE_LABELS[criteria.reportType]}</h2>
-        <div className="text-xs text-slate-600 mt-2 flex flex-wrap gap-4">
-          <span>Period: <strong>{reportService.resolveEffectiveDateRange(criteria).periodLabel}</strong></span>
-          <span>Scope: <strong>{hasStakeWideReadAccess ? (criteria.selectedUnitIds.length > 0 ? `Selected Units (${criteria.selectedUnitIds.length})` : 'Stake-Wide (All Units)') : availableUnits.map(u => u.unitName).join(', ')}</strong></span>
-          <span>Total Records: <strong>{reportData?.metrics.totalRecords || 0}</strong></span>
-          <span>Unique Attendees: <strong>{reportData?.metrics.uniqueAttendees || 0}</strong></span>
-          <span>Generated: <strong>{getLagosDate()} (Africa/Lagos)</strong></span>
+      {/* Top Module Navigation Bar (Visible only to authorized roles) */}
+      {(canGenerateGatheringPlaceReport || isUnitLeader) && (
+        <div className="flex border-b border-slate-800 no-print space-x-2 pb-1">
+          <button
+            type="button"
+            onClick={() => setActiveReportSection('standard')}
+            className={`px-4 py-2 text-xs font-bold transition rounded-xl flex items-center space-x-2 cursor-pointer ${
+              activeReportSection === 'standard'
+                ? 'bg-emerald-600 text-white shadow-md shadow-emerald-950'
+                : 'bg-slate-900 text-slate-400 hover:text-white border border-slate-800'
+            }`}
+          >
+            <span>Standard Attendance Registers</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveReportSection('gathering_place')}
+            className={`px-4 py-2 text-xs font-bold transition rounded-xl flex items-center space-x-2 cursor-pointer ${
+              activeReportSection === 'gathering_place'
+                ? 'bg-emerald-600 text-white shadow-md shadow-emerald-950'
+                : 'bg-slate-900 text-slate-400 hover:text-white border border-slate-800'
+            }`}
+          >
+            <span>
+              {canGenerateGatheringPlaceReport
+                ? 'Gathering Place Monthly Report'
+                : 'Gathering Place Monthly Reports'}
+            </span>
+          </button>
         </div>
-      </div>
+      )}
+
+      {/* Gathering Place Monthly Report View */}
+      {activeReportSection === 'gathering_place' ? (
+        <div>
+          {canGenerateGatheringPlaceReport ? (
+            <GatheringPlaceMonthlyReportWorkspace
+              units={units}
+              activities={activities}
+              sessions={_sessions}
+              members={members}
+              usersList={usersList}
+            />
+          ) : isUnitLeader ? (
+            <UnitLeaderGatheringPlaceReportsView units={units} />
+          ) : (
+            <div className="p-8 text-center text-red-400 text-xs">
+              Access Restricted.
+            </div>
+          )}
+        </div>
+      ) : (
+        /* Standard Reporting Workspace */
+        <div className="space-y-6">
+          {/* Printable Header - Visible only when printing */}
+          <div className="hidden print:block mb-6 border-b-2 border-slate-900 pb-4">
+            <h1 className="text-xl font-bold text-slate-900">Abeokuta Nigeria Obantoko Stake — YSA AMS</h1>
+            <h2 className="text-base font-semibold text-slate-800">{REPORT_TYPE_LABELS[criteria.reportType]}</h2>
+            <div className="text-xs text-slate-600 mt-2 flex flex-wrap gap-4">
+              <span>Period: <strong>{reportService.resolveEffectiveDateRange(criteria).periodLabel}</strong></span>
+              <span>Scope: <strong>{hasStakeWideReadAccess ? (criteria.selectedUnitIds.length > 0 ? `Selected Units (${criteria.selectedUnitIds.length})` : 'Stake-Wide (All Units)') : availableUnits.map(u => u.unitName).join(', ')}</strong></span>
+              <span>Total Records: <strong>{reportData?.metrics.totalRecords || 0}</strong></span>
+              <span>Unique Attendees: <strong>{reportData?.metrics.uniqueAttendees || 0}</strong></span>
+              <span>Generated: <strong>{getLagosDate()} (Africa/Lagos)</strong></span>
+            </div>
+          </div>
 
       {/* 1. Top Header: Report Title, Presets, Actions */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-slate-800 no-print">
@@ -1474,5 +1542,7 @@ export const ReportingWorkspace: React.FC<ReportingWorkspaceProps> = ({
         )}
       </div>
     </div>
+  )}
+</div>
   )
 }

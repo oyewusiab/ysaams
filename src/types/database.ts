@@ -45,6 +45,8 @@ export interface UserProfile {
   id: string
   fullName: string
   email: string
+  phoneNumber?: string | null
+  isStakePresident?: boolean
   roles: AppRole[]
   unitAssignments?: UserUnitAssignment[]
   unitId?: string | null
@@ -52,6 +54,8 @@ export interface UserProfile {
   createdAt: string
   updatedAt?: string
 }
+
+export * from './gatheringPlaceReport'
 
 export interface MemberRecord {
   id: string

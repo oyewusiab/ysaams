@@ -334,7 +334,7 @@ export const authService = {
       // Fetch user roles
       const { data: rolesData, error: rolesError } = await supabase
         .from('user_roles')
-        .select('role_name')
+        .select('role_name, is_stake_president')
         .eq('user_id', userId)
 
       if (rolesError) {
@@ -346,6 +346,9 @@ export const authService = {
       }
 
       const roles = (rolesData || []).map((r: { role_name: AppRole }) => r.role_name)
+      const isStakePresident = (rolesData || []).some(
+        (r: any) => r.role_name === 'stake_presidency' && r.is_stake_president === true
+      )
 
       // Fetch unit assignments
       const { data: unitData } = await supabase
@@ -367,6 +370,8 @@ export const authService = {
           id: data.id,
           fullName: data.full_name,
           email: data.email,
+          phoneNumber: (data as any).phone_number || null,
+          isStakePresident,
           roles,
           unitAssignments,
           unitId: unitAssignments[0]?.unitId || null,

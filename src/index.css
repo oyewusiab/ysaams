@@ -345,4 +345,13 @@ body.dark,
     padding: 6px 8px !important;
     color: #1e293b !important;
   }
+
+  .gathering-place-report-paper {
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: none !important;
+    box-shadow: none !important;
+  }
 }

@@ -11,13 +11,17 @@ export interface DerivedLeadershipAccess {
   isSystemAdmin: boolean
   isStakeLeader: boolean
   isStakeClerk: boolean
+  isStakePresident: boolean
   hasStakeWideReadAccess: boolean
   isClerkRoleOnly: boolean
   isViewOnlyRoleOnly: boolean
+  isUnitLeader: boolean
   canManageActivities: boolean
   canManageMembers: boolean
   canRecordManualAttendance: boolean
   canAccessGatheringPlace: boolean
+  canGenerateGatheringPlaceReport: boolean
+  canApproveGatheringPlaceReport: boolean
   assignedUnitIds: string[]
   manageableUnitIds: string[]
   reportUnitFilter: string[] | null
@@ -29,12 +33,14 @@ export interface DerivedLeadershipAccess {
  */
 export function deriveLeadershipAccess(
   roles: AppRole[],
-  unitAssignments: UserUnitAssignment[] = []
+  unitAssignments: UserUnitAssignment[] = [],
+  isStakePresident = false
 ): DerivedLeadershipAccess {
   const isSystemAdmin = roles.includes('system_admin')
   // Strictly system_admin or stake_presidency (governs session reopening, user directory, and audit logs)
   const isStakeLeader = isSystemAdmin || roles.includes('stake_presidency')
   const isStakeClerk = roles.includes('stake_clerk')
+  const isPresident = Boolean(isStakePresident && roles.includes('stake_presidency'))
   // Stake-wide read/reporting access (includes stake_clerk, or a ysa_leader assigned to all units via assignedUnitIds)
   const hasStakeWideReadAccess = isStakeLeader || isStakeClerk
 
@@ -88,9 +94,10 @@ export function deriveLeadershipAccess(
     'stake_clerk'
   ]
   const isViewOnlyRoleOnly =
-    roles.length > 0 &&
     roles.some((r) => viewOnlyTargetRoles.includes(r)) &&
     !roles.some((r) => excludedFromViewOnlyRoles.includes(r))
+
+  const isUnitLeader = roles.some((r) => viewOnlyTargetRoles.includes(r))
 
   // Gathering Place Access strictly restricted to the 4 authorized roles:
   // - system_admin
@@ -104,19 +111,31 @@ export function deriveLeadershipAccess(
     roles.includes('stake_presidency') ||
     roles.includes('ysa_leader')
 
+  // Gathering Place Monthly Report Generation: system_admin, stake_presidency, stake_clerk
+  const canGenerateGatheringPlaceReport =
+    isSystemAdmin || roles.includes('stake_presidency') || roles.includes('stake_clerk')
+
+  // Gathering Place Monthly Report Approval: system_admin or verified Stake President
+  const canApproveGatheringPlaceReport =
+    isSystemAdmin || (roles.includes('stake_presidency') && isPresident)
+
   const reportUnitFilter: string[] | null = hasStakeWideReadAccess ? null : assignedUnitIds
 
   return {
     isSystemAdmin,
     isStakeLeader,
     isStakeClerk,
+    isStakePresident: isPresident,
     hasStakeWideReadAccess,
     isClerkRoleOnly,
     isViewOnlyRoleOnly,
+    isUnitLeader,
     canManageActivities,
     canManageMembers,
     canRecordManualAttendance,
     canAccessGatheringPlace,
+    canGenerateGatheringPlaceReport,
+    canApproveGatheringPlaceReport,
     assignedUnitIds,
     manageableUnitIds,
     reportUnitFilter
@@ -340,7 +359,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return roles.includes(role)
   }
 
-  const access = deriveLeadershipAccess(roles, user?.unitAssignments || [])
+  const access = deriveLeadershipAccess(
+    roles,
+    user?.unitAssignments || [],
+    user?.isStakePresident || false
+  )
 
   const signOut = async () => {
     setRecoveryMode(false)
