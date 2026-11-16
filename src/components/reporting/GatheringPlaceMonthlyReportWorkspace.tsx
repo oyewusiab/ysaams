@@ -14,7 +14,9 @@ import {
   FileSpreadsheet,
   Edit3,
   RefreshCw,
-  Info
+  Info,
+  Zap,
+  ShieldAlert
 } from 'lucide-react'
 import { useAuth } from '../../context/AuthContext'
 import { getLagosParts } from '../../lib/timezone'
@@ -29,11 +31,14 @@ import {
   GatheringPlaceMonthlyReport,
   GatheringPlaceReportFilterCriteria,
   GatheringPlaceReportLeaderSnapshot,
-  StakeLeaderSignature
+  StakeLeaderSignature,
+  AttendanceAdjustment
 } from '../../types/database'
 import { gatheringPlaceReportService } from '../../services/gatheringPlaceReportService'
+import { attendanceAdjustmentService } from '../../services/attendanceAdjustmentService'
 import { GatheringPlaceReportDocument } from './GatheringPlaceReportDocument'
 import { SignatureManagementModal } from './SignatureManagementModal'
+import { AttendanceAdjustmentModal } from './AttendanceAdjustmentModal'
 import { exportToCsvAdvanced, exportToXlsxAdvanced, triggerPrintReport } from '../../lib/exportUtils'
 
 interface GatheringPlaceMonthlyReportWorkspaceProps {
@@ -121,7 +126,13 @@ export const GatheringPlaceMonthlyReportWorkspace: React.FC<
   const [activeReport, setActiveReport] =
     useState<GatheringPlaceMonthlyReport | null>(null)
   const [viewUnitFilter, setViewUnitFilter] = useState<string | null>(null) // null = all stake
-  const [activeTab, setActiveTab] = useState<'workspace' | 'history'>('workspace')
+  const [activeTab, setActiveTab] = useState<'workspace' | 'history' | 'adjustments'>('workspace')
+  const [isAdjustmentModalOpen, setIsAdjustmentModalOpen] = useState(false)
+  const [adjustmentsList, setAdjustmentsList] = useState<AttendanceAdjustment[]>([])
+  const [_isLoadingAdjustments, setIsLoadingAdjustments] = useState(false)
+  const [selectedAdjustmentIds, setSelectedAdjustmentIds] = useState<string[]>([])
+  const [adjustmentActionComment, setAdjustmentActionComment] = useState('')
+  const [isReviewingAdjustments, setIsReviewingAdjustments] = useState(false)
 
   // Live data state with DB fetch fallback
   const [liveAttendanceRecords, setLiveAttendanceRecords] = useState<AttendanceRecord[]>(attendanceRecords)
@@ -187,6 +198,19 @@ export const GatheringPlaceMonthlyReportWorkspace: React.FC<
     text: string
   } | null>(null)
 
+  // Derive Stake YSA Leaders list for selector:
+  // Strictly stake_presidency or ysa_leader.
+  // system_admin is EXCLUDED unless they also hold stake_presidency or ysa_leader.
+  const availableLeaders = useMemo(() => {
+    const list = usersList.filter(
+      (u) => u.roles.includes('ysa_leader') || u.roles.includes('stake_presidency')
+    )
+    if (list.length === 0 && user && (user.roles.includes('ysa_leader') || user.roles.includes('stake_presidency'))) {
+      return [user]
+    }
+    return list
+  }, [usersList, user])
+
   // Load signatures and past reports
   const loadSignaturesAndReports = async () => {
     if (!user) return
@@ -194,9 +218,20 @@ export const GatheringPlaceMonthlyReportWorkspace: React.FC<
       const sigs = await gatheringPlaceReportService.listSignatures()
       setSignatures(sigs)
       if (sigs.length > 0 && !selectedLeaderId) {
-        setSelectedLeaderId(sigs[0].userId)
+        const eligibleSig = sigs.find((s) =>
+          availableLeaders.some((l) => l.id === s.userId)
+        )
+        if (eligibleSig) {
+          setSelectedLeaderId(eligibleSig.userId)
+        } else if (availableLeaders.length > 0) {
+          setSelectedLeaderId(availableLeaders[0].id)
+        }
       } else if (!selectedLeaderId && user) {
-        setSelectedLeaderId(user.id)
+        if (user.roles.includes('stake_presidency') || user.roles.includes('ysa_leader')) {
+          setSelectedLeaderId(user.id)
+        } else if (availableLeaders.length > 0) {
+          setSelectedLeaderId(availableLeaders[0].id)
+        }
       }
 
       const list = await gatheringPlaceReportService.listReports(user)
@@ -206,33 +241,111 @@ export const GatheringPlaceMonthlyReportWorkspace: React.FC<
     }
   }
 
+  const loadAdjustments = async () => {
+    setIsLoadingAdjustments(true)
+    try {
+      const list = await attendanceAdjustmentService.listAdjustments()
+      setAdjustmentsList(list)
+    } catch {
+      // Non-blocking
+    } finally {
+      setIsLoadingAdjustments(false)
+    }
+  }
+
   useEffect(() => {
     loadSignaturesAndReports()
+    loadAdjustments()
   }, [user])
 
-  // Derive Stake YSA Leaders list for selector
-  const availableLeaders = useMemo(() => {
-    const list = usersList.filter(
-      (u) =>
-        u.roles.includes('ysa_leader') ||
-        u.roles.includes('system_admin') ||
-        u.roles.includes('stake_presidency')
-    )
-    if (list.length === 0 && user) {
-      return [user]
+  const handleReviewAdjustments = async (action: 'approve' | 'reject') => {
+    if (!user || selectedAdjustmentIds.length === 0) return
+    setIsReviewingAdjustments(true)
+    setFeedbackMessage(null)
+    try {
+      const res = await attendanceAdjustmentService.reviewAdjustments(
+        selectedAdjustmentIds,
+        action,
+        adjustmentActionComment,
+        user
+      )
+      setFeedbackMessage({
+        type: 'success',
+        text: `Successfully ${action === 'approve' ? 'approved and applied' : 'rejected'} ${res.count} adjustment request(s).`
+      })
+      setSelectedAdjustmentIds([])
+      setAdjustmentActionComment('')
+      loadAdjustments()
+      reloadMonthData(selectedYear, selectedMonth)
+      loadSignaturesAndReports()
+    } catch (err: any) {
+      setFeedbackMessage({
+        type: 'error',
+        text: err.message || 'Failed to review adjustments.'
+      })
+    } finally {
+      setIsReviewingAdjustments(false)
     }
-    return list
-  }, [usersList, user])
+  }
+
+  const handleGenerateRevisedReport = async (oldReport: GatheringPlaceMonthlyReport) => {
+    if (!user) return
+    setFeedbackMessage(null)
+
+    await reloadMonthData(oldReport.reportingYear, oldReport.reportingMonth)
+
+    const revisedSnapshot = gatheringPlaceReportService.buildReportSnapshot({
+      year: oldReport.reportingYear,
+      month: oldReport.reportingMonth,
+      monthName: oldReport.monthName,
+      units,
+      activities,
+      sessions: liveSessions,
+      attendanceRecords: liveAttendanceRecords,
+      sessionVisitors: liveSessionVisitors,
+      members,
+      criteria: oldReport.filterCriteria,
+      selectedLeader: resolvedLeaderSnapshot,
+      generatedBy: user,
+      existingVersion: oldReport.version
+    })
+
+    try {
+      const persisted = await gatheringPlaceReportService.createReport(
+        revisedSnapshot,
+        user
+      )
+      setActiveReport(persisted)
+      loadSignaturesAndReports()
+      setFeedbackMessage({
+        type: 'success',
+        text: `Revised Report (v${persisted.version}) generated successfully!`
+      })
+    } catch (err: any) {
+      setFeedbackMessage({
+        type: 'error',
+        text: err.message || 'Failed to generate revised report.'
+      })
+    }
+  }
 
   // Resolved Leader Snapshot
   const resolvedLeaderSnapshot: GatheringPlaceReportLeaderSnapshot = useMemo(() => {
     const sig = signatures.find((s) => s.userId === selectedLeaderId)
     const leaderUser = availableLeaders.find((l) => l.id === selectedLeaderId)
+    const role = leaderUser?.roles.includes('stake_presidency')
+      ? 'stake_presidency'
+      : leaderUser?.roles.includes('ysa_leader')
+      ? 'ysa_leader'
+      : undefined
+
     return {
       userId: selectedLeaderId,
-      fullName: sig?.fullName || leaderUser?.fullName || 'Victor Ogundele',
+      fullName: sig?.fullName || leaderUser?.fullName || 'Stake YSA Leadership',
       phoneNumber: sig?.phoneNumber || leaderUser?.phoneNumber || '08083238902',
-      signatureDataUrl: sig?.signatureDataUrl || ''
+      signatureDataUrl: sig?.signatureDataUrl || '',
+      role: role || null,
+      signedAt: new Date().toISOString()
     }
   }, [selectedLeaderId, signatures, availableLeaders])
 
@@ -491,6 +604,24 @@ export const GatheringPlaceMonthlyReportWorkspace: React.FC<
         />
       )}
 
+      {/* Attendance Adjustment Modal */}
+      {user && (
+        <AttendanceAdjustmentModal
+          isOpen={isAdjustmentModalOpen}
+          onClose={() => setIsAdjustmentModalOpen(false)}
+          sessions={liveSessions}
+          members={members}
+          units={units}
+          allMonthAttendance={liveAttendanceRecords}
+          currentUser={user}
+          onAdjustmentApplied={() => {
+            reloadMonthData(selectedYear, selectedMonth)
+            loadAdjustments()
+            loadSignaturesAndReports()
+          }}
+        />
+      )}
+
       {/* Review Modal (Approve, Disapprove, Request Correction) */}
       {showReviewModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-fade-in">
@@ -597,6 +728,24 @@ export const GatheringPlaceMonthlyReportWorkspace: React.FC<
           >
             <Clock className="w-3.5 h-3.5" />
             <span>Past Reports ({reportsList.length})</span>
+          </button>
+          <button
+            onClick={() => setActiveTab('adjustments')}
+            className={`px-3.5 py-2 rounded-xl text-xs font-semibold transition cursor-pointer flex items-center space-x-1.5 ${
+              activeTab === 'adjustments'
+                ? 'bg-emerald-600 text-white shadow-md shadow-emerald-900/40'
+                : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+            }`}
+          >
+            <Zap className="w-3.5 h-3.5" />
+            <span>
+              Adjustments
+              {adjustmentsList.filter((a) => a.status === 'pending_approval').length > 0 && (
+                <span className="ml-1.5 px-1.5 py-0.2 rounded-full text-[10px] bg-amber-500 text-slate-950 font-bold">
+                  {adjustmentsList.filter((a) => a.status === 'pending_approval').length}
+                </span>
+              )}
+            </span>
           </button>
         </div>
       </div>
@@ -1163,6 +1312,32 @@ export const GatheringPlaceMonthlyReportWorkspace: React.FC<
           {/* Active Report Preview & Actions */}
           {activeReport && (
             <div className="space-y-4">
+              {/* Revision Alert Banner for Approved Reports affected by Adjustments */}
+              {activeReport.status === 'approved' && activeReport.hasPendingRevision && (
+                <div className="p-4 bg-amber-950/70 border-2 border-amber-500 rounded-2xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs text-amber-200 shadow-xl">
+                  <div className="flex items-start gap-3">
+                    <AlertCircle className="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5" />
+                    <div>
+                      <strong className="text-amber-300 block text-sm">
+                        Pending Revision Triggered (Approved Version {activeReport.version})
+                      </strong>
+                      <span>
+                        {activeReport.revisionTriggerReason || 'Manual attendance adjustments have modified the records for this month.'}{' '}
+                        The original approved snapshot remains immutable as Version {activeReport.version}. A formal revised report (Version {activeReport.version + 1}) must be generated and re-approved before replacing the active report.
+                      </span>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleGenerateRevisedReport(activeReport)}
+                    className="px-4 py-2 bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold rounded-xl text-xs transition flex-shrink-0 flex items-center gap-1.5 shadow-md cursor-pointer"
+                  >
+                    <RefreshCw className="w-4 h-4" />
+                    <span>Generate Revised Report (v{activeReport.version + 1})</span>
+                  </button>
+                </div>
+              )}
+
               {/* Document Toolbar & Approval Lifecycle */}
               <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 flex flex-col md:flex-row justify-between items-center gap-4">
                 <div className="flex items-center space-x-3">
@@ -1403,6 +1578,239 @@ export const GatheringPlaceMonthlyReportWorkspace: React.FC<
               </table>
             </div>
           )}
+        </div>
+      )}
+
+      {/* Main Tab 3: Attendance Adjustments & Corrections */}
+      {activeTab === 'adjustments' && (
+        <div className="space-y-6">
+          {/* Header Bar */}
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+            <div>
+              <h3 className="text-sm font-bold text-white flex items-center space-x-2">
+                <Zap className="w-4 h-4 text-emerald-400" />
+                <span>Audited Attendance Adjustments</span>
+              </h3>
+              <p className="text-xs text-slate-400 mt-1">
+                Non-destructive manual adjustments. Historical attendance records are void-stamped and preserved.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setIsAdjustmentModalOpen(true)}
+              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold transition flex items-center gap-2 shadow-lg shadow-indigo-950 cursor-pointer"
+            >
+              <Zap className="w-4 h-4" />
+              <span>Initiate Attendance Adjustment</span>
+            </button>
+          </div>
+
+          {/* Pending Approval Queue */}
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-4">
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 border-b border-slate-800 pb-3">
+              <div>
+                <h4 className="text-xs font-bold text-slate-200 uppercase tracking-wider flex items-center gap-2">
+                  <ShieldAlert className="w-4 h-4 text-amber-400" />
+                  Pending Approval Queue ({adjustmentsList.filter((a) => a.status === 'pending_approval').length})
+                </h4>
+                <p className="text-[11px] text-slate-500">
+                  Submissions requiring Stake Presidency or System Admin review and application.
+                </p>
+              </div>
+
+              {/* Bulk Actions for Approvers */}
+              {canApprove && selectedAdjustmentIds.length > 0 && (
+                <div className="flex flex-wrap items-center gap-2">
+                  <input
+                    type="text"
+                    value={adjustmentActionComment}
+                    onChange={(e) => setAdjustmentActionComment(e.target.value)}
+                    placeholder="Review comment / note..."
+                    className="px-2.5 py-1 text-xs bg-slate-950 border border-slate-700 rounded-lg text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => handleReviewAdjustments('approve')}
+                    disabled={isReviewingAdjustments || selectedAdjustmentIds.some((id) => adjustmentsList.find((a) => a.id === id)?.requestedBy === user?.id)}
+                    className="px-3 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold transition disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+                  >
+                    Approve ({selectedAdjustmentIds.length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleReviewAdjustments('reject')}
+                    disabled={isReviewingAdjustments || !adjustmentActionComment.trim()}
+                    className="px-3 py-1 bg-rose-600 hover:bg-rose-500 text-white rounded-lg text-xs font-bold transition disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+                  >
+                    Reject ({selectedAdjustmentIds.length})
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {canApprove && selectedAdjustmentIds.some((id) => adjustmentsList.find((a) => a.id === id)?.requestedBy === user?.id) && (
+              <div className="p-2.5 bg-amber-950/60 border border-amber-800 rounded-xl text-xs text-amber-300 flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                <span>
+                  Self-approval blocked: One or more selected adjustments were requested by your account. Another leader must review them.
+                </span>
+              </div>
+            )}
+
+            {adjustmentsList.filter((a) => a.status === 'pending_approval').length === 0 ? (
+              <div className="p-6 text-center text-xs text-slate-500 italic">
+                No adjustments pending approval.
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs text-left text-slate-300">
+                  <thead className="bg-slate-950/60 text-slate-400 uppercase text-[10px]">
+                    <tr>
+                      {canApprove && <th className="p-3 w-8"></th>}
+                      <th className="p-3">Member</th>
+                      <th className="p-3">Session</th>
+                      <th className="p-3">Action</th>
+                      <th className="p-3">Reason</th>
+                      <th className="p-3">Requested By</th>
+                      <th className="p-3">Requested At</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800">
+                    {adjustmentsList
+                      .filter((a) => a.status === 'pending_approval')
+                      .map((adj) => {
+                        const isChecked = selectedAdjustmentIds.includes(adj.id)
+                        return (
+                          <tr key={adj.id} className="hover:bg-slate-800/40 transition">
+                            {canApprove && (
+                              <td className="p-3">
+                                <input
+                                  type="checkbox"
+                                  checked={isChecked}
+                                  onChange={() => {
+                                    setSelectedAdjustmentIds((prev) =>
+                                      prev.includes(adj.id)
+                                        ? prev.filter((id) => id !== adj.id)
+                                        : [...prev, adj.id]
+                                    )
+                                  }}
+                                  className="rounded text-indigo-600 focus:ring-indigo-500"
+                                />
+                              </td>
+                            )}
+                            <td className="p-3 font-semibold text-white">
+                              {adj.memberName || adj.metadata?.member_name || 'Member'}
+                            </td>
+                            <td className="p-3 text-slate-300">
+                              {adj.sessionTitle || adj.metadata?.session_title || 'Session'} ({adj.sessionDate || adj.metadata?.session_date})
+                            </td>
+                            <td className="p-3">
+                              <span
+                                className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase border ${
+                                  adj.adjustmentType === 'add_attendance'
+                                    ? 'bg-emerald-950 border-emerald-600 text-emerald-300'
+                                    : 'bg-rose-950 border-rose-600 text-rose-300'
+                                }`}
+                              >
+                                {adj.adjustmentType === 'add_attendance' ? '+ Add' : '- Void'}
+                              </span>
+                            </td>
+                            <td className="p-3 text-slate-400 max-w-xs truncate" title={adj.reason}>
+                              {adj.reason}
+                            </td>
+                            <td className="p-3 text-slate-400">
+                              {adj.requestedByName || 'Authorized User'}
+                            </td>
+                            <td className="p-3 text-slate-400 font-mono text-[11px]">
+                              {new Date(adj.requestedAt).toLocaleDateString('en-GB')}
+                            </td>
+                          </tr>
+                        )
+                      })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          {/* Applied & Historical Adjustments */}
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-4">
+            <div className="border-b border-slate-800 pb-3">
+              <h4 className="text-xs font-bold text-slate-200 uppercase tracking-wider">
+                Adjustment Audit History ({adjustmentsList.filter((a) => a.status !== 'pending_approval').length})
+              </h4>
+              <p className="text-[11px] text-slate-500">
+                Immutable audit trail of applied and rejected adjustments.
+              </p>
+            </div>
+
+            {adjustmentsList.filter((a) => a.status !== 'pending_approval').length === 0 ? (
+              <div className="p-6 text-center text-xs text-slate-500 italic">
+                No historical adjustments on record.
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs text-left text-slate-300">
+                  <thead className="bg-slate-950/60 text-slate-400 uppercase text-[10px]">
+                    <tr>
+                      <th className="p-3">Member</th>
+                      <th className="p-3">Session</th>
+                      <th className="p-3">Action</th>
+                      <th className="p-3">Status</th>
+                      <th className="p-3">Reason</th>
+                      <th className="p-3">Reviewed By</th>
+                      <th className="p-3">Applied At</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800">
+                    {adjustmentsList
+                      .filter((a) => a.status !== 'pending_approval')
+                      .map((adj) => (
+                        <tr key={adj.id} className="hover:bg-slate-800/40 transition">
+                          <td className="p-3 font-semibold text-white">
+                            {adj.memberName || adj.metadata?.member_name || 'Member'}
+                          </td>
+                          <td className="p-3 text-slate-300">
+                            {adj.sessionTitle || adj.metadata?.session_title || 'Session'} ({adj.sessionDate || adj.metadata?.session_date})
+                          </td>
+                          <td className="p-3">
+                            <span
+                              className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase border ${
+                                adj.adjustmentType === 'add_attendance'
+                                  ? 'bg-emerald-950 border-emerald-600 text-emerald-300'
+                                  : 'bg-rose-950 border-rose-600 text-rose-300'
+                              }`}
+                            >
+                              {adj.adjustmentType === 'add_attendance' ? '+ Add' : '- Void'}
+                            </span>
+                          </td>
+                          <td className="p-3">
+                            <span
+                              className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase border ${
+                                adj.status === 'applied'
+                                  ? 'bg-emerald-950 border-emerald-600 text-emerald-300'
+                                  : 'bg-rose-950 border-rose-600 text-rose-300'
+                              }`}
+                            >
+                              {adj.status}
+                            </span>
+                          </td>
+                          <td className="p-3 text-slate-400 max-w-xs truncate" title={adj.reason}>
+                            {adj.reason}
+                          </td>
+                          <td className="p-3 text-slate-400">
+                            {adj.reviewedByName || adj.appliedByName || 'Executive'}
+                          </td>
+                          <td className="p-3 text-slate-400 font-mono text-[11px]">
+                            {adj.appliedAt ? new Date(adj.appliedAt).toLocaleDateString('en-GB') : '—'}
+                          </td>
+                        </tr>
+                      ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
         </div>
       )}
     </div>

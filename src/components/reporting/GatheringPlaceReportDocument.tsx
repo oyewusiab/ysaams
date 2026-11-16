@@ -160,12 +160,17 @@ export const GatheringPlaceReportDocument: React.FC<GatheringPlaceReportDocument
 
       {/* 5. Stake YSA Leader Sign-Off & Verification Footer */}
       <div className="mt-6 pt-4 border-t border-slate-300 grid grid-cols-1 sm:grid-cols-3 gap-4 items-center text-xs sm:text-sm">
-        {/* Leader Name */}
+        {/* Leader Name & Role */}
         <div>
-          <span className="font-semibold text-slate-700">Stake YSA Leaders: </span>
-          <span className="font-black text-slate-950 uppercase ml-1">
+          <div className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">Stake YSA Sign-Off</div>
+          <div className="font-black text-slate-950 uppercase text-xs sm:text-sm">
             {report.leaderSnapshot?.fullName || 'Stake YSA Leadership'}
-          </span>
+          </div>
+          {report.leaderSnapshot?.role && (
+            <div className="text-[11px] font-bold text-indigo-700 tracking-wide mt-0.5">
+              {report.leaderSnapshot.role === 'stake_presidency' ? 'Stake Presidency' : 'Stake YSA Leader'}
+            </div>
+          )}
         </div>
 
         {/* E-Signature */}
@@ -186,12 +191,19 @@ export const GatheringPlaceReportDocument: React.FC<GatheringPlaceReportDocument
           </div>
         </div>
 
-        {/* Contact Phone */}
+        {/* Contact Phone & Date */}
         <div className="sm:text-right">
-          <span className="font-semibold text-slate-700">Contact: </span>
-          <span className="font-mono font-bold text-slate-950 text-sm ml-1">
-            {report.leaderSnapshot?.phoneNumber || 'N/A'}
-          </span>
+          <div>
+            <span className="font-semibold text-slate-700">Contact: </span>
+            <span className="font-mono font-bold text-slate-950 text-xs sm:text-sm ml-1">
+              {report.leaderSnapshot?.phoneNumber || 'N/A'}
+            </span>
+          </div>
+          {(report.signedAt || report.leaderSnapshot?.signedAt || report.approvedAt || report.generatedAt) && (
+            <div className="text-[10px] text-slate-400 font-mono mt-0.5">
+              Signed: {new Date(report.signedAt || report.leaderSnapshot?.signedAt || report.approvedAt || report.generatedAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}
+            </div>
+          )}
         </div>
       </div>
 

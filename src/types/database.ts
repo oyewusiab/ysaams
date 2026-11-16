@@ -56,6 +56,7 @@ export interface UserProfile {
 }
 
 export * from './gatheringPlaceReport'
+export * from './attendanceAdjustment'
 
 export interface MemberRecord {
   id: string
@@ -170,6 +171,12 @@ export interface AttendanceRecord {
   checkInTime: string
   recordedByTerminalId?: string | null
   isManual?: boolean
+  isVoided?: boolean
+  voidedAt?: string | null
+  voidedBy?: string | null
+  voidReason?: string | null
+  adjustmentId?: string | null
+  isManualAdjustment?: boolean
 }
 
 export interface SessionVisitor {

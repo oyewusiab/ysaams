@@ -180,6 +180,7 @@ export function calculateParticipantVisits(
   // 1. Process member attendance records
   if (memberClassification !== 'visitors_only') {
     attendanceRecords.forEach((rec) => {
+      if (rec.isVoided) return
       if (!rec.sessionId || !eligibleSessionMap.has(rec.sessionId)) return
 
       const session = eligibleSessionMap.get(rec.sessionId)!
@@ -364,6 +365,7 @@ export function calculateAttendanceDistribution(params: {
   // 1. Members
   if (memberClassification !== 'visitors_only') {
     attendanceRecords.forEach((rec) => {
+      if (rec.isVoided) return
       if (!rec.sessionId || !eligibleSessionIds.has(rec.sessionId)) return
       if (!isAllUnits && selectedUnitIds.length > 0 && rec.unitId && !selectedUnitIds.includes(rec.unitId)) return
 
@@ -493,7 +495,7 @@ export const gatheringPlaceReportService = {
     while (hasMore) {
       const { data: pageData, error: pageErr } = await supabase
         .from('attendance_records')
-        .select('id, session_id, member_id, recorded_unit_id, selected_class, check_in_time, created_at')
+        .select('id, session_id, member_id, recorded_unit_id, selected_class, check_in_time, created_at, is_voided, voided_at, voided_by, void_reason, adjustment_id, is_manual_adjustment')
         .in('session_id', sessionIds)
         .range(from, from + BATCH_SIZE - 1)
 
@@ -571,7 +573,13 @@ export const gatheringPlaceReportService = {
         unitName,
         selectedClass: a.selected_class,
         checkInTime: a.check_in_time,
-        isNonMember: false
+        isNonMember: false,
+        isVoided: Boolean(a.is_voided),
+        voidedAt: a.voided_at,
+        voidedBy: a.voided_by,
+        voidReason: a.void_reason,
+        adjustmentId: a.adjustment_id,
+        isManualAdjustment: Boolean(a.is_manual_adjustment)
       }
     })
 
@@ -606,6 +614,7 @@ export const gatheringPlaceReportService = {
     criteria: GatheringPlaceReportFilterCriteria
     selectedLeader: GatheringPlaceReportLeaderSnapshot
     generatedBy: UserProfile
+    existingVersion?: number
   }): GatheringPlaceMonthlyReport {
     const {
       year,
@@ -618,8 +627,17 @@ export const gatheringPlaceReportService = {
       members = [],
       criteria,
       selectedLeader,
-      generatedBy
+      generatedBy,
+      existingVersion
     } = params
+
+    // Signatory validation: strictly stake_presidency or ysa_leader
+    if (selectedLeader?.role) {
+      const isEligibleSignatory = ['stake_presidency', 'ysa_leader'].includes(selectedLeader.role)
+      if (!isEligibleSignatory) {
+        throw new Error('Invalid signatory: Only Stake Presidency or Stake YSA Leader can provide Stake YSA Leader Sign-Off.')
+      }
+    }
 
     const { expectedVisits, eligibleSessions } = calculateExpectedVisits({
       year,
@@ -667,7 +685,7 @@ export const gatheringPlaceReportService = {
       reportingMonth: month,
       monthName,
       status: initialStatus,
-      version: 1,
+      version: existingVersion ? existingVersion + 1 : 1,
       expectedVisitsPerYa: expectedVisits,
       totalEligibleOccurrences: eligibleSessions.length,
       minimumVisitThreshold: criteria.minimumVisitThreshold,
@@ -708,6 +726,12 @@ export const gatheringPlaceReportService = {
 
     if (!isGenerator) {
       throw new Error('Permission denied. Only System Administrator, Stake Presidency, or Stake Clerk may generate reports.')
+    }
+
+    if (report.leaderSnapshot?.role) {
+      if (!['stake_presidency', 'ysa_leader'].includes(report.leaderSnapshot.role)) {
+        throw new Error('Permission denied: Only Stake Presidency or Stake YSA Leader can provide Stake YSA Leader Sign-Off.')
+      }
     }
 
     try {
@@ -855,6 +879,10 @@ export const gatheringPlaceReportService = {
         correctionRequestedBy: r.correction_requested_by,
         correctionRequestedAt: r.correction_requested_at,
         correctionComment: r.correction_comment,
+        hasPendingRevision: Boolean(r.has_pending_revision),
+        revisionTriggerReason: r.revision_trigger_reason,
+        signatoryRole: r.signatory_role,
+        signedAt: r.signed_at,
         createdAt: r.created_at,
         updatedAt: r.updated_at
       }))
@@ -960,6 +988,10 @@ export const gatheringPlaceReportService = {
         correctionRequestedBy: reportData.correction_requested_by,
         correctionRequestedAt: reportData.correction_requested_at,
         correctionComment: reportData.correction_comment,
+        hasPendingRevision: Boolean(reportData.has_pending_revision),
+        revisionTriggerReason: reportData.revision_trigger_reason,
+        signatoryRole: reportData.signatory_role,
+        signedAt: reportData.signed_at,
         createdAt: reportData.created_at,
         updatedAt: reportData.updated_at,
         items

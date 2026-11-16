@@ -30,6 +30,8 @@ export interface GatheringPlaceReportLeaderSnapshot {
   fullName: string
   phoneNumber: string
   signatureDataUrl: string
+  role?: string | null
+  signedAt?: string | null
 }
 
 export interface GatheringPlaceReportItem {
@@ -98,6 +100,10 @@ export interface GatheringPlaceMonthlyReport {
   disapprovedByName?: string | null
   disapprovedAt?: string | null
   disapprovalReason?: string | null
+  hasPendingRevision?: boolean
+  revisionTriggerReason?: string | null
+  signatoryRole?: string | null
+  signedAt?: string | null
   correctionRequestedBy?: string | null
   correctionRequestedByName?: string | null
   correctionRequestedAt?: string | null

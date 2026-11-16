@@ -22,6 +22,9 @@ export interface DerivedLeadershipAccess {
   canAccessGatheringPlace: boolean
   canGenerateGatheringPlaceReport: boolean
   canApproveGatheringPlaceReport: boolean
+  canSignGatheringPlaceReport: boolean
+  canInitiateAttendanceAdjustment: boolean
+  canApproveAttendanceAdjustment: boolean
   assignedUnitIds: string[]
   manageableUnitIds: string[]
   reportUnitFilter: string[] | null
@@ -119,6 +122,19 @@ export function deriveLeadershipAccess(
   const canApproveGatheringPlaceReport =
     isSystemAdmin || (roles.includes('stake_presidency') && isPresident)
 
+  // Gathering Place Sign-Off: Strictly stake_presidency or ysa_leader.
+  // system_admin is NOT granted sign-off authority unless holding one of these roles.
+  const canSignGatheringPlaceReport =
+    roles.includes('stake_presidency') || roles.includes('ysa_leader')
+
+  // Attendance Adjustment Initiation: system_admin, stake_presidency, stake_clerk
+  const canInitiateAttendanceAdjustment =
+    isSystemAdmin || roles.includes('stake_presidency') || roles.includes('stake_clerk')
+
+  // Attendance Adjustment Approval: Strictly system_admin or stake_presidency
+  const canApproveAttendanceAdjustment =
+    isSystemAdmin || roles.includes('stake_presidency')
+
   const reportUnitFilter: string[] | null = hasStakeWideReadAccess ? null : assignedUnitIds
 
   return {
@@ -136,6 +152,9 @@ export function deriveLeadershipAccess(
     canAccessGatheringPlace,
     canGenerateGatheringPlaceReport,
     canApproveGatheringPlaceReport,
+    canSignGatheringPlaceReport,
+    canInitiateAttendanceAdjustment,
+    canApproveAttendanceAdjustment,
     assignedUnitIds,
     manageableUnitIds,
     reportUnitFilter
