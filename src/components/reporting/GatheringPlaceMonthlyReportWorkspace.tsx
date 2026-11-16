@@ -16,7 +16,9 @@ import {
   RefreshCw,
   Info,
   Zap,
-  ShieldAlert
+  ShieldAlert,
+  ShieldCheck,
+  AlertTriangle
 } from 'lucide-react'
 import { useAuth } from '../../context/AuthContext'
 import { getLagosParts } from '../../lib/timezone'
@@ -1241,6 +1243,91 @@ export const GatheringPlaceMonthlyReportWorkspace: React.FC<
                   </span>
                 </div>
               </div>
+
+              {/* Audited Attendance Source Reconciliation Grid */}
+              <div className="pt-2 border-t border-slate-800/80 space-y-2">
+                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-1">
+                  <span className="text-[11px] font-bold text-slate-300 flex items-center gap-1.5">
+                    <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+                    Audited Attendance Source Reconciliation:
+                  </span>
+                  <span className={`text-[10px] px-2 py-0.5 rounded-full font-mono font-semibold border ${
+                    attendanceDistribution.reconciliation?.isReconciled
+                      ? 'bg-emerald-950/60 border-emerald-500/60 text-emerald-300'
+                      : 'bg-amber-950/60 border-amber-500/60 text-amber-300'
+                  }`}>
+                    {attendanceDistribution.reconciliation?.isReconciled
+                      ? '✓ 100% Mathematically Reconciled'
+                      : '⚠️ Reconciliation Variance Detected'}
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center text-xs">
+                  <div className="bg-slate-900/90 border border-slate-800 p-2 rounded-lg">
+                    <span className="text-[10px] text-slate-400 uppercase block font-semibold">Original Check-Ins</span>
+                    <strong className="text-sm font-mono text-white">
+                      {attendanceDistribution.reconciliation?.originalValidAttendance ?? attendanceDistribution.totalRecords}
+                    </strong>
+                    <span className="text-[9px] block text-slate-500">terminal check-ins</span>
+                  </div>
+
+                  <div className="bg-slate-900/90 border border-emerald-900/40 p-2 rounded-lg">
+                    <span className="text-[10px] text-emerald-400 uppercase block font-semibold">+ Applied Additions</span>
+                    <strong className="text-sm font-mono text-emerald-300">
+                      +{attendanceDistribution.reconciliation?.appliedManualAdditions ?? 0}
+                    </strong>
+                    <span className="text-[9px] block text-emerald-500/80">audited manual additions</span>
+                  </div>
+
+                  <div className="bg-slate-900/90 border border-rose-900/40 p-2 rounded-lg">
+                    <span className="text-[10px] text-rose-400 uppercase block font-semibold">- Applied Removals</span>
+                    <strong className="text-sm font-mono text-rose-300">
+                      -{attendanceDistribution.reconciliation?.appliedRemovals ?? 0}
+                    </strong>
+                    <span className="text-[9px] block text-rose-500/80">voided records</span>
+                  </div>
+
+                  <div className="bg-emerald-950/40 border border-emerald-600/60 p-2 rounded-lg">
+                    <span className="text-[10px] text-emerald-300 uppercase block font-semibold">= Final Valid Attendance</span>
+                    <strong className="text-sm font-mono text-emerald-200">
+                      {attendanceDistribution.reconciliation?.finalValidAttendance ?? attendanceDistribution.totalRecords}
+                    </strong>
+                    <span className="text-[9px] block text-emerald-400">net reportable visits</span>
+                  </div>
+                </div>
+
+                <div className="text-[10px] text-slate-400 bg-slate-950/60 px-3 py-1.5 rounded-lg border border-slate-800/80 flex items-center justify-between">
+                  <span className="font-mono">
+                    Reconciliation: {attendanceDistribution.reconciliation?.originalValidAttendance ?? 0} (Original) + {attendanceDistribution.reconciliation?.appliedManualAdditions ?? 0} (Additions) - {attendanceDistribution.reconciliation?.appliedRemovals ?? 0} (Removals) = {attendanceDistribution.reconciliation?.finalValidAttendance ?? 0} Valid Visits
+                  </span>
+                  <span className="text-slate-500">Gross: {attendanceDistribution.reconciliation?.totalGrossRecorded ?? 0}</span>
+                </div>
+              </div>
+
+              {/* Threshold Filter Warning Notice */}
+              {attendanceDistribution.totalDistinctAttendees > 0 && attendanceDistribution.qualifyingCount === 0 && (
+                <div className="p-3.5 bg-amber-950/60 border border-amber-500/70 rounded-xl flex items-start gap-3 text-amber-200 text-xs shadow-md">
+                  <AlertTriangle className="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5" />
+                  <div className="flex-1 space-y-1">
+                    <div className="font-bold text-amber-300 text-sm flex items-center gap-1.5">
+                      <span>Threshold Filter Alert: 0 Qualifying Attendees at Threshold ≥ {minimumVisitThreshold}</span>
+                    </div>
+                    <p className="text-amber-200/90 leading-relaxed">
+                      There are <strong>{attendanceDistribution.totalDistinctAttendees}</strong> distinct attendees with valid attendance (<strong>{attendanceDistribution.totalRecords}</strong> total visits) in this period. Because your current Minimum Visit Threshold is set to <strong>≥ {minimumVisitThreshold}</strong>, all attendees with fewer than {minimumVisitThreshold} visits are excluded from the report table.
+                    </p>
+                    <div className="pt-1 flex items-center gap-2">
+                      <span className="text-slate-300">To include all attendees who attended:</span>
+                      <button
+                        type="button"
+                        onClick={() => setMinimumVisitThreshold(1)}
+                        className="px-3 py-1 bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold rounded-lg text-xs transition cursor-pointer shadow"
+                      >
+                        Set Minimum Threshold to ≥ 1
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {/* Attendee Frequency Distribution Pills */}
               <div className="space-y-2 pt-1 border-t border-slate-800/80">

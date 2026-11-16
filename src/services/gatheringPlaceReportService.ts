@@ -323,6 +323,18 @@ export function calculateParticipantVisits(
   return items
 }
 
+export interface AttendanceReconciliationMetrics {
+  originalValidAttendance: number
+  appliedManualAdditions: number
+  appliedRemovals: number
+  totalGrossRecorded: number
+  finalValidAttendance: number
+  totalDistinctAttendees: number
+  qualifyingCount: number
+  isReconciled: boolean
+  discrepancyMessage?: string | null
+}
+
 export interface AttendanceDistributionResult {
   totalRecords: number
   totalDistinctAttendees: number
@@ -334,6 +346,7 @@ export interface AttendanceDistributionResult {
     visits5Plus: number
   }
   qualifyingCount: number
+  reconciliation: AttendanceReconciliationMetrics
 }
 
 /**
@@ -362,12 +375,26 @@ export function calculateAttendanceDistribution(params: {
   const eligibleSessionIds = new Set(eligibleSessions.map((s) => s.id))
   const attendeeVisitsMap = new Map<string, Set<string>>()
 
+  let originalValidAttendance = 0
+  let appliedManualAdditions = 0
+  let appliedRemovals = 0
+
   // 1. Members
   if (memberClassification !== 'visitors_only') {
     attendanceRecords.forEach((rec) => {
-      if (rec.isVoided) return
       if (!rec.sessionId || !eligibleSessionIds.has(rec.sessionId)) return
       if (!isAllUnits && selectedUnitIds.length > 0 && rec.unitId && !selectedUnitIds.includes(rec.unitId)) return
+
+      if (rec.isVoided) {
+        appliedRemovals++
+        return
+      }
+
+      if (rec.isManualAdjustment) {
+        appliedManualAdditions++
+      } else {
+        originalValidAttendance++
+      }
 
       const key = rec.memberId || `name_${rec.attendeeName.toLowerCase().trim()}`
       if (!attendeeVisitsMap.has(key)) {
@@ -382,6 +409,8 @@ export function calculateAttendanceDistribution(params: {
     sessionVisitors.forEach((vis) => {
       if (!vis.sessionId || !eligibleSessionIds.has(vis.sessionId)) return
       if (!isAllUnits && selectedUnitIds.length > 0 && vis.invitingUnitId && !selectedUnitIds.includes(vis.invitingUnitId)) return
+
+      originalValidAttendance++
 
       const key = `vis_${vis.fullName.toLowerCase().trim()}`
       if (!attendeeVisitsMap.has(key)) {
@@ -413,6 +442,26 @@ export function calculateAttendanceDistribution(params: {
     }
   })
 
+  const totalGrossRecorded = originalValidAttendance + appliedManualAdditions + appliedRemovals
+  const finalValidAttendance = originalValidAttendance + appliedManualAdditions
+  const isReconciled =
+    finalValidAttendance === originalValidAttendance + appliedManualAdditions &&
+    finalValidAttendance === totalGrossRecorded - appliedRemovals
+
+  const reconciliation: AttendanceReconciliationMetrics = {
+    originalValidAttendance,
+    appliedManualAdditions,
+    appliedRemovals,
+    totalGrossRecorded,
+    finalValidAttendance,
+    totalDistinctAttendees: attendeeVisitsMap.size,
+    qualifyingCount,
+    isReconciled,
+    discrepancyMessage: isReconciled
+      ? null
+      : `Reconciliation discrepancy: Gross (${totalGrossRecorded}) - Removals (${appliedRemovals}) does not match Final Valid Attendance (${finalValidAttendance}).`
+  }
+
   return {
     totalRecords,
     totalDistinctAttendees: attendeeVisitsMap.size,
@@ -423,7 +472,8 @@ export function calculateAttendanceDistribution(params: {
       visits4,
       visits5Plus
     },
-    qualifyingCount
+    qualifyingCount,
+    reconciliation
   }
 }
 
@@ -546,6 +596,56 @@ export const gatheringPlaceReportService = {
     }
     const unitMap = new Map<string, string>()
     ;(rawUnits || []).forEach((u: any) => unitMap.set(u.id, u.unit_name))
+
+    // 4b. Fetch applied adjustments for these sessions to guarantee zero-drop parity
+    try {
+      const { data: appliedAdjustments } = await supabase
+        .from('attendance_adjustments')
+        .select('id, session_id, member_id, adjustment_type, class_name, status, affected_record_id, metadata')
+        .in('session_id', sessionIds)
+        .eq('status', 'applied')
+
+      if (appliedAdjustments && appliedAdjustments.length > 0) {
+        appliedAdjustments.forEach((adj: any) => {
+          if (adj.adjustment_type === 'add_attendance') {
+            const exists = allRawAttendance.some(
+              (r) =>
+                !r.is_voided &&
+                (r.adjustment_id === adj.id ||
+                  (r.session_id === adj.session_id && r.member_id === adj.member_id))
+            )
+            if (!exists) {
+              allRawAttendance.push({
+                id: adj.affected_record_id || `adj-${adj.id}`,
+                session_id: adj.session_id,
+                member_id: adj.member_id,
+                recorded_unit_id: adj.metadata?.home_unit_id,
+                selected_class: adj.class_name,
+                check_in_time: adj.metadata?.session_date || new Date().toISOString(),
+                created_at: adj.metadata?.session_date || new Date().toISOString(),
+                is_voided: false,
+                adjustment_id: adj.id,
+                is_manual_adjustment: true
+              })
+            }
+          } else if (adj.adjustment_type === 'remove_attendance') {
+            allRawAttendance.forEach((r) => {
+              if (
+                r.session_id === adj.session_id &&
+                r.member_id === adj.member_id &&
+                !r.is_voided
+              ) {
+                r.is_voided = true
+                r.void_reason = 'Applied adjustment removal'
+                r.adjustment_id = adj.id
+              }
+            })
+          }
+        })
+      }
+    } catch (adjErr) {
+      console.warn('Non-blocking: could not cross-check attendance adjustments:', adjErr)
+    }
 
     // 5. Fetch visitors for the sessions
     const { data: rawVisitors, error: visitorsErr } = await supabase

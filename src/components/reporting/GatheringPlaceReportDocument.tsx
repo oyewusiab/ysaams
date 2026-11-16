@@ -118,7 +118,12 @@ export const GatheringPlaceReportDocument: React.FC<GatheringPlaceReportDocument
                   colSpan={5}
                   className="border border-amber-900/60 p-6 text-center text-slate-500 italic"
                 >
-                  No participants met the selected reporting and attendance criteria for this unit.
+                  <div>No participants met the selected reporting and attendance criteria for this unit.</div>
+                  {report.minimumVisitThreshold > 1 && (
+                    <div className="text-xs text-slate-400 mt-1 not-italic">
+                      (Minimum visit threshold: &ge; {report.minimumVisitThreshold} visits. If attendees participated in fewer sessions, regenerate the report with threshold &ge; 1.)
+                    </div>
+                  )}
                 </td>
               </tr>
             ) : (

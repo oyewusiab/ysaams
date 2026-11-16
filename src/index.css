@@ -357,3 +357,41 @@ body.dark,
     break-after: avoid !important;
   }
 }
+
+/* =============================================================================
+   Audited Attendance Adjustment Modal & High-Contrast Form Controls
+   Ensures dropdowns, selects, option lists, and textareas maintain crisp contrast
+   across all platforms (Windows Chromium, macOS, WebKit) and avoid white-on-white text.
+   ============================================================================= */
+select.dark-form-select,
+.attendance-modal-dark select {
+  color-scheme: dark;
+  background-color: #020617 !important;
+  color: #f8fafc !important;
+  border-color: #334155 !important;
+}
+
+select.dark-form-select option,
+.attendance-modal-dark select option {
+  background-color: #0f172a !important;
+  color: #f8fafc !important;
+  padding: 8px 12px !important;
+}
+
+select.dark-form-select option:checked,
+.attendance-modal-dark select option:checked {
+  background-color: #059669 !important;
+  color: #ffffff !important;
+}
+
+select.dark-form-select option:hover,
+.attendance-modal-dark select option:hover {
+  background-color: #1e293b !important;
+  color: #ffffff !important;
+}
+
+.attendance-modal-dark input::placeholder,
+.attendance-modal-dark textarea::placeholder {
+  color: #64748b !important;
+}
+

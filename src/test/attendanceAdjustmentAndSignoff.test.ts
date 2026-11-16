@@ -597,4 +597,126 @@ describe('YSA AMS — Flexible Stake YSA Leader Sign-Off & Audited Attendance Ad
       expect(fallbackLeaders[0].fullName).toBe('President Adebaki')
     })
   })
+
+  describe('Audited Attendance Reconciliation & Pre-Flight Diagnostics Suite', () => {
+    it('accurately reconciles original valid attendance, manual additions, and voided removals with pure mathematical identity', () => {
+      const records: AttendanceRecord[] = [
+        // 2 original check-ins
+        {
+          id: 'rec-orig-1',
+          sessionId: 'sess-1',
+          memberId: 'm-1',
+          attendeeName: 'Adeola Balogun',
+          isNonMember: false,
+          unitId: 'u-1',
+          checkInTime: '2026-11-03T10:05:00Z',
+          isVoided: false,
+          isManualAdjustment: false
+        },
+        {
+          id: 'rec-orig-2',
+          sessionId: 'sess-1',
+          memberId: 'm-2',
+          attendeeName: 'Chinedu Eze',
+          isNonMember: false,
+          unitId: 'u-1',
+          checkInTime: '2026-11-03T10:10:00Z',
+          isVoided: false,
+          isManualAdjustment: false
+        },
+        // 1 applied manual addition
+        {
+          id: 'rec-adj-add-1',
+          sessionId: 'sess-1',
+          memberId: 'm-3',
+          attendeeName: 'Fatima Lawal',
+          isNonMember: false,
+          unitId: 'u-2',
+          checkInTime: '2026-11-03T10:00:00Z',
+          isVoided: false,
+          isManualAdjustment: true,
+          adjustmentId: 'adj-1'
+        },
+        // 1 voided removal record
+        {
+          id: 'rec-adj-rem-1',
+          sessionId: 'sess-1',
+          memberId: 'm-4',
+          attendeeName: 'Voided Member',
+          isNonMember: false,
+          unitId: 'u-1',
+          checkInTime: '2026-11-03T10:15:00Z',
+          isVoided: true,
+          voidedAt: '2026-11-04T12:00:00Z',
+          voidReason: 'Mistaken scan',
+          isManualAdjustment: false
+        }
+      ]
+
+      const result = calculateAttendanceDistribution({
+        attendanceRecords: records,
+        eligibleSessions: [heldSession],
+        minimumVisitThreshold: 1,
+        isAllUnits: true
+      })
+
+      expect(result.reconciliation.originalValidAttendance).toBe(2)
+      expect(result.reconciliation.appliedManualAdditions).toBe(1)
+      expect(result.reconciliation.appliedRemovals).toBe(1)
+      expect(result.reconciliation.totalGrossRecorded).toBe(4)
+      expect(result.reconciliation.finalValidAttendance).toBe(3)
+      expect(result.reconciliation.isReconciled).toBe(true)
+      expect(result.reconciliation.discrepancyMessage).toBeNull()
+
+      // Mathematical proof: Final = Original (2) + Additions (1) - Removals (0 from net) === Gross (4) - Removals (1)
+      expect(result.reconciliation.finalValidAttendance).toBe(
+        result.reconciliation.originalValidAttendance + result.reconciliation.appliedManualAdditions
+      )
+      expect(result.reconciliation.finalValidAttendance).toBe(
+        result.reconciliation.totalGrossRecorded - result.reconciliation.appliedRemovals
+      )
+      expect(result.totalDistinctAttendees).toBe(3)
+      expect(result.qualifyingCount).toBe(3)
+    })
+
+    it('identifies when participants exist with >= 1 visit but are filtered out by threshold >= 5', () => {
+      // 13 applied manual adjustments for 13 distinct members, each with 1 visit
+      const thirteenAdjustedRecords: AttendanceRecord[] = Array.from({ length: 13 }, (_, i) => ({
+        id: `rec-oct-${i + 1}`,
+        sessionId: 'sess-1',
+        memberId: `member-oct-${i + 1}`,
+        attendeeName: `October Attendee ${i + 1}`,
+        isNonMember: false,
+        unitId: 'u-1',
+        checkInTime: '2026-11-03T10:00:00Z',
+        isVoided: false,
+        isManualAdjustment: true,
+        adjustmentId: `adj-${i + 1}`
+      }))
+
+      // Standard threshold >= 5: Qualifying count should be 0, but total distinct attendees is 13
+      const standardThresholdResult = calculateAttendanceDistribution({
+        attendanceRecords: thirteenAdjustedRecords,
+        eligibleSessions: [heldSession],
+        minimumVisitThreshold: 5,
+        isAllUnits: true
+      })
+
+      expect(standardThresholdResult.totalDistinctAttendees).toBe(13)
+      expect(standardThresholdResult.totalRecords).toBe(13)
+      expect(standardThresholdResult.qualifyingCount).toBe(0) // Explains "No participants met criteria"
+      expect(standardThresholdResult.distribution.visits1).toBe(13)
+      expect(standardThresholdResult.distribution.visits5Plus).toBe(0)
+
+      // Lowered threshold >= 1: All 13 qualify!
+      const loweredThresholdResult = calculateAttendanceDistribution({
+        attendanceRecords: thirteenAdjustedRecords,
+        eligibleSessions: [heldSession],
+        minimumVisitThreshold: 1,
+        isAllUnits: true
+      })
+
+      expect(loweredThresholdResult.qualifyingCount).toBe(13)
+    })
+  })
 })

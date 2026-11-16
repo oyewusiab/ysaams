@@ -190,22 +190,22 @@ export const AttendanceAdjustmentModal: React.FC<AttendanceAdjustmentModalProps>
   if (!isOpen) return null
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm overflow-y-auto">
-      <div className="bg-white rounded-xl shadow-2xl border border-slate-200 w-full max-w-4xl max-h-[92vh] flex flex-col overflow-hidden my-auto">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md overflow-y-auto">
+      <div className="bg-slate-900 rounded-2xl shadow-2xl border border-slate-800 w-full max-w-4xl max-h-[92vh] flex flex-col overflow-hidden my-auto attendance-modal-dark text-slate-100">
         {/* Header */}
-        <div className="px-6 py-4 border-b border-slate-200 bg-slate-50 flex items-center justify-between">
+        <div className="px-6 py-4 border-b border-slate-800 bg-slate-950 flex items-center justify-between">
           <div>
-            <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2">
-              <Zap className="w-5 h-5 text-indigo-600" />
+            <h2 className="text-lg font-bold text-white flex items-center gap-2">
+              <Zap className="w-5 h-5 text-emerald-400" />
               Audited Attendance Adjustment
             </h2>
-            <p className="text-xs text-slate-500">
+            <p className="text-xs text-slate-400">
               Non-destructive manual attendance adjustments with full audit history and preview.
             </p>
           </div>
           <button
             onClick={onClose}
-            className="p-1 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition"
+            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer"
           >
             <X className="w-5 h-5" />
           </button>
@@ -214,15 +214,15 @@ export const AttendanceAdjustmentModal: React.FC<AttendanceAdjustmentModalProps>
         {/* Form Body */}
         <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto p-6 space-y-6">
           {errorMessage && (
-            <div className="p-3 bg-rose-50 border border-rose-200 rounded-lg flex items-start gap-3 text-rose-800 text-sm">
-              <AlertTriangle className="w-5 h-5 text-rose-600 flex-shrink-0 mt-0.5" />
+            <div className="p-3 bg-rose-950/60 border border-rose-800/80 rounded-xl flex items-start gap-3 text-rose-200 text-xs">
+              <AlertTriangle className="w-4 h-4 text-rose-400 flex-shrink-0 mt-0.5" />
               <div>{errorMessage}</div>
             </div>
           )}
 
           {successMessage && (
-            <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-lg flex items-center gap-3 text-emerald-800 text-sm">
-              <CheckCircle2 className="w-5 h-5 text-emerald-600 flex-shrink-0" />
+            <div className="p-3 bg-emerald-950/60 border border-emerald-800/80 rounded-xl flex items-center gap-3 text-emerald-200 text-xs">
+              <CheckCircle2 className="w-4 h-4 text-emerald-400 flex-shrink-0" />
               <div>{successMessage}</div>
             </div>
           )}
@@ -230,8 +230,8 @@ export const AttendanceAdjustmentModal: React.FC<AttendanceAdjustmentModalProps>
           {/* Section 1: Session & Type */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                Target Session <span className="text-rose-500">*</span>
+              <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1">
+                Target Session <span className="text-rose-400">*</span>
               </label>
               <select
                 value={selectedSessionId}
@@ -239,19 +239,19 @@ export const AttendanceAdjustmentModal: React.FC<AttendanceAdjustmentModalProps>
                   setSelectedSessionId(e.target.value)
                   setSelectedClass('')
                 }}
-                className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                className="w-full px-3 py-2 border border-slate-700 rounded-lg text-xs bg-slate-950 text-slate-100 dark-form-select focus:outline-none focus:ring-2 focus:ring-emerald-500 transition"
                 required
               >
-                <option value="">-- Select Held Activity Session --</option>
+                <option value="" className="bg-slate-900 text-slate-300 py-1.5">-- Select Held Activity Session --</option>
                 {sessions.map((s) => (
-                  <option key={s.id} value={s.id}>
+                  <option key={s.id} value={s.id} className="bg-slate-900 text-slate-100 py-1.5">
                     {s.sessionDate} — {s.sessionTitle} ({s.status})
                   </option>
                 ))}
               </select>
 
               {sessionEligibility && !sessionEligibility.eligible && (
-                <div className="mt-1 text-xs text-rose-600 flex items-center gap-1 font-semibold">
+                <div className="mt-1 text-xs text-rose-400 flex items-center gap-1 font-semibold">
                   <AlertTriangle className="w-3.5 h-3.5" />
                   {sessionEligibility.reason}
                 </div>
@@ -259,32 +259,32 @@ export const AttendanceAdjustmentModal: React.FC<AttendanceAdjustmentModalProps>
             </div>
 
             <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                Adjustment Action <span className="text-rose-500">*</span>
+              <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1">
+                Adjustment Action <span className="text-rose-400">*</span>
               </label>
               <div className="grid grid-cols-2 gap-2">
                 <button
                   type="button"
                   onClick={() => setAdjustmentType('add_attendance')}
-                  className={`px-3 py-2 rounded-lg border text-xs font-bold flex items-center justify-center gap-2 transition ${
+                  className={`px-3 py-2 rounded-lg border text-xs font-bold flex items-center justify-center gap-2 transition cursor-pointer ${
                     adjustmentType === 'add_attendance'
-                      ? 'bg-emerald-50 border-emerald-500 text-emerald-700 ring-2 ring-emerald-400/20'
-                      : 'border-slate-200 text-slate-600 hover:bg-slate-50'
+                      ? 'bg-emerald-950/70 border-emerald-500 text-emerald-200 ring-2 ring-emerald-500/30'
+                      : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white hover:bg-slate-800'
                   }`}
                 >
-                  <UserCheck className="w-4 h-4 text-emerald-600" />
+                  <UserCheck className="w-4 h-4 text-emerald-400" />
                   Add Attendance
                 </button>
                 <button
                   type="button"
                   onClick={() => setAdjustmentType('remove_attendance')}
-                  className={`px-3 py-2 rounded-lg border text-xs font-bold flex items-center justify-center gap-2 transition ${
+                  className={`px-3 py-2 rounded-lg border text-xs font-bold flex items-center justify-center gap-2 transition cursor-pointer ${
                     adjustmentType === 'remove_attendance'
-                      ? 'bg-rose-50 border-rose-500 text-rose-700 ring-2 ring-rose-400/20'
-                      : 'border-slate-200 text-slate-600 hover:bg-slate-50'
+                      ? 'bg-rose-950/70 border-rose-500 text-rose-200 ring-2 ring-rose-500/30'
+                      : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white hover:bg-slate-800'
                   }`}
                 >
-                  <UserMinus className="w-4 h-4 text-rose-600" />
+                  <UserMinus className="w-4 h-4 text-rose-400" />
                   Void Attendance
                 </button>
               </div>
@@ -294,17 +294,17 @@ export const AttendanceAdjustmentModal: React.FC<AttendanceAdjustmentModalProps>
           {/* Optional Class Selector */}
           {availableClasses.length > 0 && adjustmentType === 'add_attendance' && (
             <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+              <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1">
                 Skill Acquisition Class Option
               </label>
               <select
                 value={selectedClass}
                 onChange={(e) => setSelectedClass(e.target.value)}
-                className="w-full md:w-1/2 px-3 py-2 border border-slate-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                className="w-full md:w-1/2 px-3 py-2 border border-slate-700 rounded-lg text-xs bg-slate-950 text-slate-100 dark-form-select focus:outline-none focus:ring-2 focus:ring-emerald-500 transition"
               >
-                <option value="">-- General / No Specific Class --</option>
+                <option value="" className="bg-slate-900 text-slate-300 py-1.5">-- General / No Specific Class --</option>
                 {availableClasses.map((cls) => (
-                  <option key={cls} value={cls}>
+                  <option key={cls} value={cls} className="bg-slate-900 text-slate-100 py-1.5">
                     {cls}
                   </option>
                 ))}
@@ -313,13 +313,13 @@ export const AttendanceAdjustmentModal: React.FC<AttendanceAdjustmentModalProps>
           )}
 
           {/* Section 2: Member Selection */}
-          <div className="border border-slate-200 rounded-xl p-4 bg-slate-50/50 space-y-3">
+          <div className="border border-slate-800 rounded-xl p-4 bg-slate-950/60 space-y-3">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
               <div>
-                <span className="text-xs font-bold text-slate-800 uppercase tracking-wider">
+                <span className="text-xs font-bold text-slate-200 uppercase tracking-wider">
                   Select Member(s) ({selectedMemberIds.length} selected)
                 </span>
-                <p className="text-[11px] text-slate-500">
+                <p className="text-[11px] text-slate-400">
                   Search by name or filter by home ward/branch.
                 </p>
               </div>
@@ -327,14 +327,14 @@ export const AttendanceAdjustmentModal: React.FC<AttendanceAdjustmentModalProps>
                 <button
                   type="button"
                   onClick={handleSelectAllFiltered}
-                  className="px-2 py-1 bg-white border border-slate-300 rounded text-xs font-medium text-slate-700 hover:bg-slate-100"
+                  className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded text-xs font-medium text-slate-200 transition cursor-pointer"
                 >
                   Select All Filtered
                 </button>
                 <button
                   type="button"
                   onClick={handleClearSelection}
-                  className="px-2 py-1 bg-white border border-slate-300 rounded text-xs font-medium text-slate-700 hover:bg-slate-100"
+                  className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded text-xs font-medium text-slate-200 transition cursor-pointer"
                 >
                   Clear Selection
                 </button>
@@ -349,18 +349,18 @@ export const AttendanceAdjustmentModal: React.FC<AttendanceAdjustmentModalProps>
                   placeholder="Search member name..."
                   value={memberSearch}
                   onChange={(e) => setMemberSearch(e.target.value)}
-                  className="w-full pl-9 pr-3 py-1.5 text-xs bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  className="w-full pl-9 pr-3 py-1.5 text-xs bg-slate-900 border border-slate-700 text-slate-100 placeholder-slate-500 rounded-lg focus:outline-none focus:ring-1 focus:ring-emerald-500"
                 />
               </div>
               <div>
                 <select
                   value={unitFilter}
                   onChange={(e) => setUnitFilter(e.target.value)}
-                  className="w-full px-3 py-1.5 text-xs bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  className="w-full px-3 py-1.5 text-xs bg-slate-900 border border-slate-700 text-slate-100 dark-form-select rounded-lg focus:outline-none focus:ring-1 focus:ring-emerald-500"
                 >
-                  <option value="all">All Stake Units</option>
+                  <option value="all" className="bg-slate-900 text-slate-100 py-1.5">All Stake Units</option>
                   {units.map((u) => (
-                    <option key={u.id} value={u.id}>
+                    <option key={u.id} value={u.id} className="bg-slate-900 text-slate-100 py-1.5">
                       {u.unitName}
                     </option>
                   ))}
@@ -369,9 +369,9 @@ export const AttendanceAdjustmentModal: React.FC<AttendanceAdjustmentModalProps>
             </div>
 
             {/* Member Checkbox List */}
-            <div className="max-h-48 overflow-y-auto border border-slate-200 rounded-lg bg-white divide-y divide-slate-100">
+            <div className="max-h-48 overflow-y-auto border border-slate-800 rounded-lg bg-slate-900 divide-y divide-slate-800/80">
               {filteredMembers.length === 0 ? (
-                <div className="p-4 text-center text-xs text-slate-500">
+                <div className="p-4 text-center text-xs text-slate-400">
                   No members found matching your search.
                 </div>
               ) : (
@@ -380,8 +380,8 @@ export const AttendanceAdjustmentModal: React.FC<AttendanceAdjustmentModalProps>
                   return (
                     <label
                       key={m.id}
-                      className={`px-3 py-2 flex items-center justify-between text-xs cursor-pointer hover:bg-slate-50 ${
-                        isChecked ? 'bg-indigo-50/50' : ''
+                      className={`px-3 py-2 flex items-center justify-between text-xs cursor-pointer hover:bg-slate-800/80 transition ${
+                        isChecked ? 'bg-emerald-950/40 border-l-2 border-emerald-500' : ''
                       }`}
                     >
                       <div className="flex items-center gap-2">
@@ -389,11 +389,11 @@ export const AttendanceAdjustmentModal: React.FC<AttendanceAdjustmentModalProps>
                           type="checkbox"
                           checked={isChecked}
                           onChange={() => handleToggleMember(m.id)}
-                          className="rounded text-indigo-600 focus:ring-indigo-500"
+                          className="rounded bg-slate-950 border-slate-700 text-emerald-500 focus:ring-emerald-500"
                         />
-                        <span className="font-semibold text-slate-800">{m.fullName}</span>
+                        <span className="font-semibold text-slate-100">{m.fullName}</span>
                       </div>
-                      <span className="text-slate-500 text-[11px]">
+                      <span className="text-slate-400 text-[11px]">
                         {m.homeUnitName || 'Unit'}
                       </span>
                     </label>
@@ -405,26 +405,26 @@ export const AttendanceAdjustmentModal: React.FC<AttendanceAdjustmentModalProps>
 
           {/* Section 3: Live Batch Impact Preview */}
           {preview && (
-            <div className="border border-indigo-200 bg-indigo-50/30 rounded-xl p-4 space-y-3">
+            <div className="border border-emerald-900/50 bg-emerald-950/20 rounded-xl p-4 space-y-3">
               <div className="flex items-center justify-between">
-                <span className="text-xs font-bold text-indigo-950 uppercase tracking-wider flex items-center gap-1.5">
-                  <ShieldAlert className="w-4 h-4 text-indigo-600" />
+                <span className="text-xs font-bold text-emerald-400 uppercase tracking-wider flex items-center gap-1.5">
+                  <ShieldAlert className="w-4 h-4 text-emerald-400" />
                   Pre-Flight Batch Impact Preview
                 </span>
-                <span className="text-xs font-mono font-bold text-indigo-900">
+                <span className="text-xs font-mono font-bold text-emerald-300">
                   Net Visit Change: {preview.totalNetVisitChange > 0 ? `+${preview.totalNetVisitChange}` : preview.totalNetVisitChange}
                 </span>
               </div>
 
               {preview.hasConflicts && (
-                <div className="p-2.5 bg-rose-100/70 border border-rose-300 rounded-lg text-rose-900 text-xs font-medium">
+                <div className="p-2.5 bg-rose-950/70 border border-rose-800 rounded-lg text-rose-200 text-xs font-medium">
                   One or more members have conflicts. Adjustments cannot be applied until resolved.
                 </div>
               )}
 
-              <div className="max-h-44 overflow-y-auto border border-slate-200 rounded-lg bg-white overflow-hidden text-xs">
-                <table className="w-full text-left divide-y divide-slate-200">
-                  <thead className="bg-slate-100 text-[11px] font-bold text-slate-700 uppercase">
+              <div className="max-h-44 overflow-y-auto border border-slate-800 rounded-lg bg-slate-900 overflow-hidden text-xs">
+                <table className="w-full text-left divide-y divide-slate-800">
+                  <thead className="bg-slate-950 text-[11px] font-bold text-slate-400 uppercase">
                     <tr>
                       <th className="px-3 py-2">Member</th>
                       <th className="px-3 py-2">Unit</th>
@@ -434,31 +434,31 @@ export const AttendanceAdjustmentModal: React.FC<AttendanceAdjustmentModalProps>
                       <th className="px-3 py-2">Status</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-slate-100">
+                  <tbody className="divide-y divide-slate-800/60 bg-slate-900">
                     {preview.items.map((item) => (
-                      <tr key={item.memberId} className={item.isConflict ? 'bg-rose-50/50' : ''}>
-                        <td className="px-3 py-1.5 font-semibold text-slate-800">{item.memberName}</td>
-                        <td className="px-3 py-1.5 text-slate-500">{item.unitName}</td>
-                        <td className="px-3 py-1.5 text-center font-mono font-bold">{item.currentVisitsThisMonth}</td>
-                        <td className="px-3 py-1.5 text-center font-mono font-bold text-indigo-600">
+                      <tr key={item.memberId} className={item.isConflict ? 'bg-rose-950/40' : ''}>
+                        <td className="px-3 py-1.5 font-semibold text-slate-200">{item.memberName}</td>
+                        <td className="px-3 py-1.5 text-slate-400">{item.unitName}</td>
+                        <td className="px-3 py-1.5 text-center font-mono font-bold text-slate-300">{item.currentVisitsThisMonth}</td>
+                        <td className="px-3 py-1.5 text-center font-mono font-bold text-emerald-400">
                           {item.resultingVisitsThisMonth}
                         </td>
                         <td className="px-3 py-1.5 text-center">
                           {item.crossesThreshold ? (
-                            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800">
+                            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-950 text-amber-300 border border-amber-800">
                               Crosses 5-Visit Threshold
                             </span>
                           ) : (
-                            <span className="text-slate-400 text-[11px]">—</span>
+                            <span className="text-slate-500 text-[11px]">—</span>
                           )}
                         </td>
                         <td className="px-3 py-1.5">
                           {item.isConflict ? (
-                            <span className="text-rose-600 font-bold text-[11px]">
+                            <span className="text-rose-400 font-bold text-[11px]">
                               {item.conflictReason}
                             </span>
                           ) : (
-                            <span className="text-emerald-600 font-bold text-[11px]">Valid</span>
+                            <span className="text-emerald-400 font-bold text-[11px]">Valid</span>
                           )}
                         </td>
                       </tr>
@@ -471,8 +471,8 @@ export const AttendanceAdjustmentModal: React.FC<AttendanceAdjustmentModalProps>
 
           {/* Section 4: Mandatory Reason */}
           <div>
-            <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-              Mandatory Adjustment Reason <span className="text-rose-500">*</span>
+            <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1">
+              Mandatory Adjustment Reason <span className="text-rose-400">*</span>
             </label>
             <textarea
               value={reason}
@@ -481,7 +481,7 @@ export const AttendanceAdjustmentModal: React.FC<AttendanceAdjustmentModalProps>
               rows={3}
               required
               minLength={5}
-              className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              className="w-full px-3 py-2 border border-slate-700 bg-slate-950 text-slate-100 placeholder-slate-500 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500 transition"
             />
             <p className="text-[11px] text-slate-400 mt-1">
               Minimum 5 characters. This justification is permanently recorded in the database audit log.
@@ -490,10 +490,10 @@ export const AttendanceAdjustmentModal: React.FC<AttendanceAdjustmentModalProps>
 
           {/* Section 5: Direct Apply toggle for Authorized Roles */}
           {canApprove && (
-            <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg flex items-center justify-between">
+            <div className="p-3 bg-slate-950 border border-slate-800 rounded-lg flex items-center justify-between">
               <div>
-                <span className="text-xs font-bold text-slate-800">Direct Application</span>
-                <p className="text-[11px] text-slate-500">
+                <span className="text-xs font-bold text-slate-200">Direct Application</span>
+                <p className="text-[11px] text-slate-400">
                   As Stake Presidency / Admin, apply immediately without entering the pending approval queue.
                 </p>
               </div>
@@ -504,14 +504,14 @@ export const AttendanceAdjustmentModal: React.FC<AttendanceAdjustmentModalProps>
                   onChange={(e) => setIsDirectApply(e.target.checked)}
                   className="sr-only peer"
                 />
-                <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
+                <div className="w-11 h-6 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-600"></div>
               </label>
             </div>
           )}
 
           {isClerk && (
-            <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-800 flex items-center gap-2">
-              <ShieldAlert className="w-4 h-4 text-amber-600 flex-shrink-0" />
+            <div className="p-3 bg-amber-950/40 border border-amber-800/60 rounded-lg text-xs text-amber-200 flex items-center gap-2">
+              <ShieldAlert className="w-4 h-4 text-amber-400 flex-shrink-0" />
               <span>
                 Stake Clerk Submission: Adjustments will be queued with status <strong>Pending Approval</strong> for Stake Presidency review. Direct application is restricted.
               </span>
@@ -519,17 +519,17 @@ export const AttendanceAdjustmentModal: React.FC<AttendanceAdjustmentModalProps>
           )}
 
           {/* Non-destructive notice */}
-          <div className="text-[11px] text-slate-500 bg-slate-50 p-2.5 rounded-lg border border-slate-200">
+          <div className="text-[11px] text-slate-400 bg-slate-950 p-2.5 rounded-lg border border-slate-800">
             <strong>Historical Integrity:</strong> Voided attendance records are never deleted; they are marked with an immutable void stamp, timestamp, and actor identity to ensure 100% auditability.
           </div>
 
           {/* Footer Actions */}
-          <div className="pt-2 border-t border-slate-200 flex items-center justify-end gap-3">
+          <div className="pt-2 border-t border-slate-800 flex items-center justify-end gap-3">
             <button
               type="button"
               onClick={onClose}
               disabled={isSubmitting}
-              className="px-4 py-2 border border-slate-300 rounded-lg text-xs font-bold text-slate-700 hover:bg-slate-50 transition"
+              className="px-4 py-2 border border-slate-700 bg-slate-800 hover:bg-slate-700 rounded-lg text-xs font-bold text-slate-300 transition cursor-pointer"
             >
               Cancel
             </button>
@@ -544,7 +544,7 @@ export const AttendanceAdjustmentModal: React.FC<AttendanceAdjustmentModalProps>
                 reason.trim().length < 5 ||
                 Boolean(preview?.hasConflicts)
               }
-              className="px-5 py-2 bg-indigo-600 text-white rounded-lg text-xs font-bold hover:bg-indigo-700 transition flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
+              className="px-5 py-2 bg-emerald-600 text-white rounded-lg text-xs font-bold hover:bg-emerald-500 transition flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed shadow-md shadow-emerald-950 cursor-pointer"
             >
               {isSubmitting ? (
                 <span>Processing...</span>
