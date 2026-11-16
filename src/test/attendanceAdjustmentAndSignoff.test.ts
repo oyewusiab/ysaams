@@ -12,7 +12,6 @@ import {
   MemberRecord,
   StakeUnit,
   UserProfile,
-  ActivityDefinition,
   GatheringPlaceReportLeaderSnapshot
 } from '../types/database'
 
@@ -504,6 +503,98 @@ describe('YSA AMS — Flexible Stake YSA Leader Sign-Off & Audited Attendance Ad
 
       expect(reportV2.version).toBe(2)
       expect(reportV2.leaderSnapshot.role).toBe('ysa_leader')
+    })
+  })
+
+  describe('7. Stake YSA Leader Visibility & Stake Clerk Signatory Fallback Suite', () => {
+    it('grants ysa_leader access to Gathering Place workspace without adjustment or approval rights', () => {
+      const access = deriveLeadershipAccess(['ysa_leader'])
+      expect(access.canAccessGatheringPlace).toBe(true)
+      expect(access.canSignGatheringPlaceReport).toBe(true)
+      expect(access.canGenerateGatheringPlaceReport).toBe(false)
+      expect(access.canApproveGatheringPlaceReport).toBe(false)
+      expect(access.canInitiateAttendanceAdjustment).toBe(false)
+      expect(access.canApproveAttendanceAdjustment).toBe(false)
+    })
+
+    it('grants stake_clerk attendance adjustment initiation while strictly denying self-approval', () => {
+      const access = deriveLeadershipAccess(['stake_clerk'])
+      expect(access.canAccessGatheringPlace).toBe(true)
+      expect(access.canGenerateGatheringPlaceReport).toBe(true)
+      expect(access.canSignGatheringPlaceReport).toBe(false)
+      expect(access.canApproveGatheringPlaceReport).toBe(false)
+      expect(access.canInitiateAttendanceAdjustment).toBe(true)
+      expect(access.canApproveAttendanceAdjustment).toBe(false)
+    })
+
+    it('grants stake_presidency full adjustment and approval authority', () => {
+      const access = deriveLeadershipAccess(['stake_presidency'], [], true)
+      expect(access.canAccessGatheringPlace).toBe(true)
+      expect(access.canGenerateGatheringPlaceReport).toBe(true)
+      expect(access.canSignGatheringPlaceReport).toBe(true)
+      expect(access.canApproveGatheringPlaceReport).toBe(true)
+      expect(access.canInitiateAttendanceAdjustment).toBe(true)
+      expect(access.canApproveAttendanceAdjustment).toBe(true)
+    })
+
+    it('derives active signatories from stake_leader_signatures when usersList has no eligible leaders for Clerk', () => {
+      const clerkProfile: UserProfile = {
+        id: 'clerk-1',
+        fullName: 'Stake Clerk',
+        email: 'clerk@stake.org',
+        roles: ['stake_clerk'],
+        accountStatus: 'active',
+        createdAt: '2026-01-01T00:00:00Z'
+      }
+
+      // Simulate restricted usersList returned under RLS for clerk (only sees own profile)
+      const restrictedUsersList = [clerkProfile]
+
+      // Filter directly using role logic:
+      const eligibleUsers = restrictedUsersList.filter(
+        (u) => u.roles.includes('ysa_leader') || u.roles.includes('stake_presidency')
+      )
+      expect(eligibleUsers.length).toBe(0)
+
+      // Fallback to active signatures:
+      const activeSignatures = [
+        {
+          id: 'sig-1',
+          userId: 'pres-1',
+          fullName: 'President Adebaki',
+          phoneNumber: '08012345678',
+          signatureDataUrl: 'data:image/png;base64,data',
+          isActive: true,
+          createdAt: '2026-10-01T00:00:00Z',
+          updatedAt: '2026-10-01T00:00:00Z'
+        },
+        {
+          id: 'sig-2',
+          userId: 'inactive-1',
+          fullName: 'Former Leader',
+          phoneNumber: '08099999999',
+          signatureDataUrl: 'data:image/png;base64,data',
+          isActive: false,
+          createdAt: '2026-01-01T00:00:00Z',
+          updatedAt: '2026-01-01T00:00:00Z'
+        }
+      ]
+
+      const fallbackLeaders = activeSignatures
+        .filter((s) => s.isActive)
+        .map((s) => ({
+          id: s.userId,
+          fullName: s.fullName,
+          email: '',
+          phoneNumber: s.phoneNumber,
+          roles: ['ysa_leader' as const],
+          accountStatus: 'active' as const,
+          createdAt: s.createdAt
+        }))
+
+      expect(fallbackLeaders.length).toBe(1)
+      expect(fallbackLeaders[0].id).toBe('pres-1')
+      expect(fallbackLeaders[0].fullName).toBe('President Adebaki')
     })
   })
 })

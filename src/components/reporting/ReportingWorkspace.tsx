@@ -100,11 +100,15 @@ export const ReportingWorkspace: React.FC<ReportingWorkspaceProps> = ({
     hasStakeWideReadAccess,
     reportUnitFilter,
     canGenerateGatheringPlaceReport,
+    canAccessGatheringPlace,
+    canInitiateAttendanceAdjustment,
+    canApproveAttendanceAdjustment,
+    isStakeLeader,
     isUnitLeader
   } = useAuth()
 
   const [activeReportSection, setActiveReportSection] = useState<
-    'standard' | 'gathering_place'
+    'standard' | 'gathering_place' | 'adjustments'
   >('standard')
 
   // Dynamically derive available activity categories from standard categories + activities prop
@@ -466,12 +470,12 @@ export const ReportingWorkspace: React.FC<ReportingWorkspaceProps> = ({
   return (
     <div className="space-y-6">
       {/* Top Module Navigation Bar (Visible only to authorized roles) */}
-      {(canGenerateGatheringPlaceReport || isUnitLeader) && (
-        <div className="flex border-b border-slate-800 no-print space-x-2 pb-1">
+      {(canGenerateGatheringPlaceReport || canAccessGatheringPlace || isUnitLeader || canInitiateAttendanceAdjustment || canApproveAttendanceAdjustment) && (
+        <div className="flex border-b border-slate-800 no-print space-x-2 pb-1 overflow-x-auto">
           <button
             type="button"
             onClick={() => setActiveReportSection('standard')}
-            className={`px-4 py-2 text-xs font-bold transition rounded-xl flex items-center space-x-2 cursor-pointer ${
+            className={`px-4 py-2 text-xs font-bold transition rounded-xl flex items-center space-x-2 cursor-pointer whitespace-nowrap ${
               activeReportSection === 'standard'
                 ? 'bg-emerald-600 text-white shadow-md shadow-emerald-950'
                 : 'bg-slate-900 text-slate-400 hover:text-white border border-slate-800'
@@ -479,34 +483,67 @@ export const ReportingWorkspace: React.FC<ReportingWorkspaceProps> = ({
           >
             <span>Standard Attendance Registers</span>
           </button>
-          <button
-            type="button"
-            onClick={() => setActiveReportSection('gathering_place')}
-            className={`px-4 py-2 text-xs font-bold transition rounded-xl flex items-center space-x-2 cursor-pointer ${
-              activeReportSection === 'gathering_place'
-                ? 'bg-emerald-600 text-white shadow-md shadow-emerald-950'
-                : 'bg-slate-900 text-slate-400 hover:text-white border border-slate-800'
-            }`}
-          >
-            <span>
-              {canGenerateGatheringPlaceReport
-                ? 'Gathering Place Monthly Report'
-                : 'Gathering Place Monthly Reports'}
-            </span>
-          </button>
+          {(canGenerateGatheringPlaceReport || canAccessGatheringPlace || isUnitLeader) && (
+            <button
+              type="button"
+              onClick={() => setActiveReportSection('gathering_place')}
+              className={`px-4 py-2 text-xs font-bold transition rounded-xl flex items-center space-x-2 cursor-pointer whitespace-nowrap ${
+                activeReportSection === 'gathering_place'
+                  ? 'bg-emerald-600 text-white shadow-md shadow-emerald-950'
+                  : 'bg-slate-900 text-slate-400 hover:text-white border border-slate-800'
+              }`}
+            >
+              <span>
+                {canGenerateGatheringPlaceReport || canAccessGatheringPlace
+                  ? 'Gathering Place Monthly Report'
+                  : 'Gathering Place Monthly Reports'}
+              </span>
+            </button>
+          )}
+          {(canInitiateAttendanceAdjustment || canApproveAttendanceAdjustment || isStakeLeader) && (
+            <button
+              type="button"
+              onClick={() => setActiveReportSection('adjustments')}
+              className={`px-4 py-2 text-xs font-bold transition rounded-xl flex items-center space-x-2 cursor-pointer whitespace-nowrap ${
+                activeReportSection === 'adjustments'
+                  ? 'bg-emerald-600 text-white shadow-md shadow-emerald-950'
+                  : 'bg-slate-900 text-slate-400 hover:text-white border border-slate-800'
+              }`}
+            >
+              <span>Attendance Adjustments</span>
+            </button>
+          )}
         </div>
       )}
 
-      {/* Gathering Place Monthly Report View */}
-      {activeReportSection === 'gathering_place' ? (
+      {/* Dynamic Report Module View */}
+      {activeReportSection === 'adjustments' ? (
         <div>
-          {canGenerateGatheringPlaceReport ? (
+          {canInitiateAttendanceAdjustment || canApproveAttendanceAdjustment || isStakeLeader ? (
             <GatheringPlaceMonthlyReportWorkspace
               units={units}
               activities={activities}
               sessions={_sessions}
               members={members}
               usersList={usersList}
+              initialTab="adjustments"
+            />
+          ) : (
+            <div className="p-8 text-center text-red-400 text-xs">
+              Access Restricted. Attendance Adjustments require Stake Leadership or Clerk authorization.
+            </div>
+          )}
+        </div>
+      ) : activeReportSection === 'gathering_place' ? (
+        <div>
+          {canGenerateGatheringPlaceReport || canAccessGatheringPlace ? (
+            <GatheringPlaceMonthlyReportWorkspace
+              units={units}
+              activities={activities}
+              sessions={_sessions}
+              members={members}
+              usersList={usersList}
+              initialTab="workspace"
             />
           ) : isUnitLeader ? (
             <UnitLeaderGatheringPlaceReportsView units={units} />

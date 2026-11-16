@@ -32,7 +32,8 @@ import {
   GatheringPlaceReportFilterCriteria,
   GatheringPlaceReportLeaderSnapshot,
   StakeLeaderSignature,
-  AttendanceAdjustment
+  AttendanceAdjustment,
+  AppRole
 } from '../../types/database'
 import { gatheringPlaceReportService } from '../../services/gatheringPlaceReportService'
 import { attendanceAdjustmentService } from '../../services/attendanceAdjustmentService'
@@ -49,6 +50,7 @@ interface GatheringPlaceMonthlyReportWorkspaceProps {
   sessionVisitors?: SessionVisitor[]
   members?: MemberRecord[]
   usersList?: UserProfile[]
+  initialTab?: 'workspace' | 'history' | 'adjustments'
 }
 
 const MONTH_NAMES = [
@@ -75,7 +77,8 @@ export const GatheringPlaceMonthlyReportWorkspace: React.FC<
   attendanceRecords = [],
   sessionVisitors = [],
   members = [],
-  usersList = []
+  usersList = [],
+  initialTab = 'workspace'
 }) => {
   const { user, isSystemAdmin, isStakePresident, isStakeLeader } = useAuth()
 
@@ -126,7 +129,13 @@ export const GatheringPlaceMonthlyReportWorkspace: React.FC<
   const [activeReport, setActiveReport] =
     useState<GatheringPlaceMonthlyReport | null>(null)
   const [viewUnitFilter, setViewUnitFilter] = useState<string | null>(null) // null = all stake
-  const [activeTab, setActiveTab] = useState<'workspace' | 'history' | 'adjustments'>('workspace')
+  const [activeTab, setActiveTab] = useState<'workspace' | 'history' | 'adjustments'>(initialTab)
+
+  useEffect(() => {
+    if (initialTab) {
+      setActiveTab(initialTab)
+    }
+  }, [initialTab])
   const [isAdjustmentModalOpen, setIsAdjustmentModalOpen] = useState(false)
   const [adjustmentsList, setAdjustmentsList] = useState<AttendanceAdjustment[]>([])
   const [_isLoadingAdjustments, setIsLoadingAdjustments] = useState(false)
@@ -205,11 +214,32 @@ export const GatheringPlaceMonthlyReportWorkspace: React.FC<
     const list = usersList.filter(
       (u) => u.roles.includes('ysa_leader') || u.roles.includes('stake_presidency')
     )
-    if (list.length === 0 && user && (user.roles.includes('ysa_leader') || user.roles.includes('stake_presidency'))) {
+    if (list.length > 0) {
+      return list
+    }
+    // Fallback when usersList is restricted by RLS (e.g. for Stake Clerk who cannot query all user profiles):
+    // Active signatories from stake_leader_signatures (which Clerks have permission to read under Migration 16)
+    if (signatures.length > 0) {
+      return signatures
+        .filter((s) => s.isActive)
+        .map((s) => {
+          const fallbackRoles: AppRole[] = ['ysa_leader']
+          return {
+            id: s.userId,
+            fullName: s.fullName,
+            email: '',
+            phoneNumber: s.phoneNumber,
+            roles: fallbackRoles,
+            accountStatus: 'active' as const,
+            createdAt: s.createdAt
+          }
+        })
+    }
+    if (user && (user.roles.includes('ysa_leader') || user.roles.includes('stake_presidency'))) {
       return [user]
     }
-    return list
-  }, [usersList, user])
+    return []
+  }, [usersList, signatures, user])
 
   // Load signatures and past reports
   const loadSignaturesAndReports = async () => {
@@ -217,15 +247,11 @@ export const GatheringPlaceMonthlyReportWorkspace: React.FC<
     try {
       const sigs = await gatheringPlaceReportService.listSignatures()
       setSignatures(sigs)
-      if (sigs.length > 0 && !selectedLeaderId) {
-        const eligibleSig = sigs.find((s) =>
-          availableLeaders.some((l) => l.id === s.userId)
-        )
-        if (eligibleSig) {
-          setSelectedLeaderId(eligibleSig.userId)
-        } else if (availableLeaders.length > 0) {
-          setSelectedLeaderId(availableLeaders[0].id)
-        }
+      const activeSigs = sigs.filter((s) => s.isActive)
+      if (activeSigs.length > 0 && !selectedLeaderId) {
+        setSelectedLeaderId(activeSigs[0].userId)
+      } else if (sigs.length > 0 && !selectedLeaderId) {
+        setSelectedLeaderId(sigs[0].userId)
       } else if (!selectedLeaderId && user) {
         if (user.roles.includes('stake_presidency') || user.roles.includes('ysa_leader')) {
           setSelectedLeaderId(user.id)
