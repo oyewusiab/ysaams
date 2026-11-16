@@ -37,11 +37,13 @@ export const GatheringPlaceReportDocument: React.FC<GatheringPlaceReportDocument
 
   return (
     <div
+      id="gathering-place-report-document"
       className={`gathering-place-report-paper bg-white text-slate-950 font-sans mx-auto w-full max-w-[1100px] print:max-w-none print:w-full print:p-0 ${
         isPrintOnly ? 'hidden print:block' : 'p-6 sm:p-8 rounded-xl shadow-2xl border border-amber-900/30 my-4'
       }`}
       style={{
-        pageBreakAfter: 'always',
+        pageBreakAfter: 'avoid',
+        breakAfter: 'avoid',
         WebkitPrintColorAdjust: 'exact',
         printColorAdjust: 'exact'
       }}
@@ -61,8 +63,13 @@ export const GatheringPlaceReportDocument: React.FC<GatheringPlaceReportDocument
         <div className="text-slate-950">
           <span className="font-bold">Unit: </span>
           <span className="font-extrabold underline tracking-wide">
-            {unitHeading} (Abeokuta Nigeria Stake)
+            {unitHeading} (Abeokuta, Nigeria, Obantoko Stake)
           </span>
+          {report.minimumVisitThreshold > 0 && (
+            <span className="ml-2 text-[11px] font-normal text-slate-700">
+              (Minimum qualifying attendance: {report.minimumVisitThreshold} visits and above)
+            </span>
+          )}
         </div>
         <div className="text-slate-950 mt-1 sm:mt-0 font-bold">
           <span>Date: </span>
@@ -190,7 +197,7 @@ export const GatheringPlaceReportDocument: React.FC<GatheringPlaceReportDocument
 
       {/* 6. Document Footer and Page Identifier */}
       <div className="mt-6 pt-2 border-t border-slate-200 flex justify-between items-center text-[10px] sm:text-xs text-slate-500 font-mono">
-        <div>Gathering Place Attendance System</div>
+        <div>Attendance Management System</div>
         <div className="font-sans">
           Page 1{displayItems.length > 25 ? ' of ' + Math.ceil(displayItems.length / 25) : ''}
         </div>

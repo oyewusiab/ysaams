@@ -353,5 +353,7 @@ body.dark,
     padding: 0 !important;
     border: none !important;
     box-shadow: none !important;
+    page-break-after: avoid !important;
+    break-after: avoid !important;
   }
 }

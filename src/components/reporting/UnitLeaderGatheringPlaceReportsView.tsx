@@ -77,7 +77,8 @@ export const UnitLeaderGatheringPlaceReportsView: React.FC<
   const handlePrint = () => {
     if (!selectedReport) return
     triggerPrintReport(
-      `${primaryUnit?.unitName || 'Unit'} — ${selectedReport.monthName} ${selectedReport.reportingYear} Gathering Place Report`
+      `${primaryUnit?.unitName || 'Unit'} — ${selectedReport.monthName} ${selectedReport.reportingYear} Gathering Place Report`,
+      'gathering-place-report-document'
     )
   }
 
@@ -96,7 +97,7 @@ export const UnitLeaderGatheringPlaceReportsView: React.FC<
       subtitle: `EXPECTED VISIT FOR THE MONTH FOR EACH YA IS ${selectedReport.expectedVisitsPerYa}`,
       generatedAt: selectedReport.generatedAt,
       periodLabel: `${selectedReport.monthName} ${selectedReport.reportingYear}`,
-      scopeLabel: primaryUnit.unitName,
+      scopeLabel: `${primaryUnit.unitName} (Abeokuta, Nigeria, Obantoko Stake)`,
       totalRecords: selectedItems.length,
       uniqueAttendees: selectedItems.length
     }

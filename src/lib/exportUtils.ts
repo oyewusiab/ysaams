@@ -165,11 +165,129 @@ export async function exportToXlsxAdvanced(
 }
 
 /**
- * Triggers native print preview styled for printable reports / PDF save.
+ * Prints a specific report element in an isolated hidden iframe.
+ * Completely isolates the printed document from the leadership workspace UI,
+ * enforces strict landscape @page orientation (8mm 10mm margins),
+ * and eliminates trailing blank pages.
  */
-export function triggerPrintReport(title: string) {
-  const originalTitle = document.title
-  document.title = `${title} — YSA AMS`
-  window.print()
-  document.title = originalTitle
+export function printIsolatedReport(
+  elementId: string = 'gathering-place-report-document',
+  title: string = 'Gathering Place Report'
+) {
+  if (typeof window === 'undefined' || typeof document === 'undefined') {
+    return
+  }
+
+  const targetEl = document.getElementById(elementId)
+  if (!targetEl) {
+    // Fallback to standard window.print if target element not found
+    const originalTitle = document.title
+    document.title = `${title} — YSA AMS`
+    window.print()
+    document.title = originalTitle
+    return
+  }
+
+  // Create isolated hidden iframe
+  const iframe = document.createElement('iframe')
+  iframe.style.position = 'fixed'
+  iframe.style.right = '0'
+  iframe.style.bottom = '0'
+  iframe.style.width = '0'
+  iframe.style.height = '0'
+  iframe.style.border = '0'
+  iframe.setAttribute('aria-hidden', 'true')
+  document.body.appendChild(iframe)
+
+  const iframeDoc = iframe.contentWindow?.document
+  if (!iframeDoc) {
+    const originalTitle = document.title
+    document.title = `${title} — YSA AMS`
+    window.print()
+    document.title = originalTitle
+    if (document.body.contains(iframe)) {
+      document.body.removeChild(iframe)
+    }
+    return
+  }
+
+  // Collect stylesheet tags from host document
+  const headStyles = Array.from(
+    document.querySelectorAll('style, link[rel="stylesheet"]')
+  )
+    .map((el) => el.outerHTML)
+    .join('\n')
+
+  iframeDoc.open()
+  iframeDoc.write(`
+    <!DOCTYPE html>
+    <html lang="en">
+      <head>
+        <meta charset="utf-8" />
+        <title>${title} — YSA AMS</title>
+        ${headStyles}
+        <style>
+          @page {
+            size: landscape;
+            margin: 8mm 10mm;
+          }
+          html, body {
+            margin: 0 !important;
+            padding: 0 !important;
+            background-color: #ffffff !important;
+            color: #0f172a !important;
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
+          }
+          .gathering-place-report-paper {
+            width: 100% !important;
+            max-width: 100% !important;
+            margin: 0 auto !important;
+            padding: 0 !important;
+            border: none !important;
+            box-shadow: none !important;
+            page-break-after: avoid !important;
+            break-after: avoid !important;
+          }
+        </style>
+      </head>
+      <body>
+        ${targetEl.outerHTML}
+      </body>
+    </html>
+  `)
+  iframeDoc.close()
+
+  // Small delay to allow images / fonts in iframe to settle
+  setTimeout(() => {
+    try {
+      iframe.contentWindow?.focus()
+      iframe.contentWindow?.print()
+    } finally {
+      setTimeout(() => {
+        if (document.body.contains(iframe)) {
+          document.body.removeChild(iframe)
+        }
+      }, 1000)
+    }
+  }, 300)
+}
+
+/**
+ * Triggers native print preview styled for printable reports / PDF save.
+ * If elementId exists, routes through printIsolatedReport.
+ */
+export function triggerPrintReport(
+  title: string,
+  elementId: string = 'gathering-place-report-document'
+) {
+  if (typeof document !== 'undefined' && document.getElementById(elementId)) {
+    printIsolatedReport(elementId, title)
+  } else {
+    const originalTitle = document.title
+    document.title = `${title} — YSA AMS`
+    window.print()
+    document.title = originalTitle
+  }
 }

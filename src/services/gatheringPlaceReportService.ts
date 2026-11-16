@@ -322,15 +322,121 @@ export function calculateParticipantVisits(
   return items
 }
 
+export interface AttendanceDistributionResult {
+  totalRecords: number
+  totalDistinctAttendees: number
+  distribution: {
+    visits1: number
+    visits2: number
+    visits3: number
+    visits4: number
+    visits5Plus: number
+  }
+  qualifyingCount: number
+}
+
+/**
+ * Calculates attendance frequency distribution (1, 2, 3, 4, 5+ visits) for all attendees.
+ * Used for pre-flight reconciliation and transparent threshold explanation.
+ */
+export function calculateAttendanceDistribution(params: {
+  attendanceRecords: AttendanceRecord[]
+  sessionVisitors?: SessionVisitor[]
+  eligibleSessions: ActivitySession[]
+  minimumVisitThreshold: number
+  selectedUnitIds?: string[]
+  isAllUnits?: boolean
+  memberClassification?: 'all' | 'members_only' | 'visitors_only'
+}): AttendanceDistributionResult {
+  const {
+    attendanceRecords,
+    sessionVisitors = [],
+    eligibleSessions,
+    minimumVisitThreshold,
+    selectedUnitIds = [],
+    isAllUnits = true,
+    memberClassification = 'all'
+  } = params
+
+  const eligibleSessionIds = new Set(eligibleSessions.map((s) => s.id))
+  const attendeeVisitsMap = new Map<string, Set<string>>()
+
+  // 1. Members
+  if (memberClassification !== 'visitors_only') {
+    attendanceRecords.forEach((rec) => {
+      if (!rec.sessionId || !eligibleSessionIds.has(rec.sessionId)) return
+      if (!isAllUnits && selectedUnitIds.length > 0 && rec.unitId && !selectedUnitIds.includes(rec.unitId)) return
+
+      const key = rec.memberId || `name_${rec.attendeeName.toLowerCase().trim()}`
+      if (!attendeeVisitsMap.has(key)) {
+        attendeeVisitsMap.set(key, new Set())
+      }
+      attendeeVisitsMap.get(key)!.add(rec.sessionId)
+    })
+  }
+
+  // 2. Visitors
+  if (memberClassification !== 'members_only') {
+    sessionVisitors.forEach((vis) => {
+      if (!vis.sessionId || !eligibleSessionIds.has(vis.sessionId)) return
+      if (!isAllUnits && selectedUnitIds.length > 0 && vis.invitingUnitId && !selectedUnitIds.includes(vis.invitingUnitId)) return
+
+      const key = `vis_${vis.fullName.toLowerCase().trim()}`
+      if (!attendeeVisitsMap.has(key)) {
+        attendeeVisitsMap.set(key, new Set())
+      }
+      attendeeVisitsMap.get(key)!.add(vis.sessionId)
+    })
+  }
+
+  let totalRecords = 0
+  let visits1 = 0
+  let visits2 = 0
+  let visits3 = 0
+  let visits4 = 0
+  let visits5Plus = 0
+  let qualifyingCount = 0
+
+  attendeeVisitsMap.forEach((sessionSet) => {
+    const count = sessionSet.size
+    totalRecords += count
+    if (count === 1) visits1++
+    else if (count === 2) visits2++
+    else if (count === 3) visits3++
+    else if (count === 4) visits4++
+    else if (count >= 5) visits5Plus++
+
+    if (count >= minimumVisitThreshold) {
+      qualifyingCount++
+    }
+  })
+
+  return {
+    totalRecords,
+    totalDistinctAttendees: attendeeVisitsMap.size,
+    distribution: {
+      visits1,
+      visits2,
+      visits3,
+      visits4,
+      visits5Plus
+    },
+    qualifyingCount
+  }
+}
+
 export const gatheringPlaceReportService = {
   /**
    * Helper calculation methods
    */
   calculateExpectedVisits,
   calculateParticipantVisits,
+  calculateAttendanceDistribution,
 
   /**
-   * Fetches real month attendance records, visitors, and sessions from database
+   * Fetches real month attendance records, visitors, and sessions from database.
+   * Resolves records by session_id to avoid timezone drift and avoids fragile nested PostgREST embeds.
+   * Never silently swallows database errors; surfaces real errors to the caller.
    */
   async fetchMonthAttendanceData(
     year: number,
@@ -345,70 +451,143 @@ export const gatheringPlaceReportService = {
     const lastDay = new Date(year, month, 0).getDate()
     const endDate = `${year}-${monthStr}-${String(lastDay).padStart(2, '0')}`
 
-    try {
-      const [sessionsRes, attendanceRes, visitorsRes] = await Promise.all([
-        supabase
-          .from('activity_sessions')
-          .select('id, activity_id, session_title, session_date, start_time, scheduled_end_time, status, participating_units, class_options, activities(title, category, class_options)')
-          .gte('session_date', startDate)
-          .lte('session_date', endDate),
-        supabase
-          .from('attendance_records')
-          .select('id, session_id, member_id, recorded_unit_id, selected_class, check_in_time, members(full_name, home_unit_id, stake_units(unit_name))')
-          .gte('check_in_time', `${startDate}T00:00:00Z`)
-          .lte('check_in_time', `${endDate}T23:59:59Z`),
-        supabase
-          .from('session_visitors')
-          .select('id, session_id, full_name, contact_phone, is_church_member, inviting_unit_id, selected_class, created_at, stake_units(unit_name)')
-          .gte('created_at', `${startDate}T00:00:00Z`)
-          .lte('created_at', `${endDate}T23:59:59Z`)
-      ])
+    // 1. Fetch sessions for the month
+    const { data: rawSessions, error: sessionsErr } = await supabase
+      .from('activity_sessions')
+      .select('id, activity_id, session_title, session_date, start_time, scheduled_end_time, status, participating_units, class_options, activities(title, category, class_options)')
+      .gte('session_date', startDate)
+      .lte('session_date', endDate)
 
-      const sessions: ActivitySession[] = (sessionsRes.data || []).map((s: any) => ({
-        id: s.id,
-        activityId: s.activity_id,
-        activityTitle: s.activities?.title || s.session_title,
-        activityCategory: s.activities?.category,
-        classOptions: s.class_options || s.activities?.class_options,
-        sessionTitle: s.session_title,
-        sessionDate: s.session_date,
-        startTime: s.start_time,
-        scheduledEndTime: s.scheduled_end_time,
-        status: s.status,
-        maxTerminals: 1,
-        timezone: 'Africa/Lagos',
-        visitorRegistrationEnabled: true,
-        createdAt: s.session_date
-      }))
+    if (sessionsErr) {
+      throw new Error(`Failed to fetch sessions: ${sessionsErr.message}`)
+    }
 
-      const attendanceRecords: AttendanceRecord[] = (attendanceRes.data || []).map((a: any) => ({
+    const sessions: ActivitySession[] = (rawSessions || []).map((s: any) => ({
+      id: s.id,
+      activityId: s.activity_id,
+      activityTitle: s.activities?.title || s.session_title,
+      activityCategory: s.activities?.category,
+      classOptions: s.class_options || s.activities?.class_options,
+      sessionTitle: s.session_title,
+      sessionDate: s.session_date,
+      startTime: s.start_time,
+      scheduledEndTime: s.scheduled_end_time,
+      status: s.status,
+      maxTerminals: 1,
+      timezone: 'Africa/Lagos',
+      visitorRegistrationEnabled: true,
+      createdAt: s.session_date
+    }))
+
+    const sessionIds = sessions.map((s) => s.id)
+    if (sessionIds.length === 0) {
+      return { sessions: [], attendanceRecords: [], sessionVisitors: [] }
+    }
+
+    // 2. Fetch attendance records in batches for all session IDs (handles large monthly sets without PostgREST 1000-row limit truncation)
+    const BATCH_SIZE = 1000
+    let allRawAttendance: any[] = []
+    let from = 0
+    let hasMore = true
+
+    while (hasMore) {
+      const { data: pageData, error: pageErr } = await supabase
+        .from('attendance_records')
+        .select('id, session_id, member_id, recorded_unit_id, selected_class, check_in_time, created_at')
+        .in('session_id', sessionIds)
+        .range(from, from + BATCH_SIZE - 1)
+
+      if (pageErr) {
+        throw new Error(`Failed to fetch attendance records: ${pageErr.message}`)
+      }
+
+      if (pageData && pageData.length > 0) {
+        allRawAttendance = allRawAttendance.concat(pageData)
+        if (pageData.length < BATCH_SIZE) {
+          hasMore = false
+        } else {
+          from += BATCH_SIZE
+        }
+      } else {
+        hasMore = false
+      }
+    }
+
+    // 3. Fetch member profiles for attendees (un-nested, robust lookup)
+    const memberIds = Array.from(
+      new Set(allRawAttendance.map((a: any) => a.member_id).filter(Boolean))
+    )
+    const memberMap = new Map<string, { id: string; full_name: string; preferred_name?: string; home_unit_id: string }>()
+    if (memberIds.length > 0) {
+      // Chunk member queries in batches of 500
+      for (let i = 0; i < memberIds.length; i += 500) {
+        const chunk = memberIds.slice(i, i + 500)
+        const { data: rawMembers, error: membersErr } = await supabase
+          .from('members')
+          .select('id, full_name, preferred_name, home_unit_id')
+          .in('id', chunk)
+
+        if (membersErr) {
+          throw new Error(`Failed to fetch member details: ${membersErr.message}`)
+        }
+        ;(rawMembers || []).forEach((m: any) => memberMap.set(m.id, m))
+      }
+    }
+
+    // 4. Fetch stake units to map unit names reliably
+    const { data: rawUnits, error: unitsErr } = await supabase
+      .from('stake_units')
+      .select('id, unit_name')
+
+    if (unitsErr) {
+      throw new Error(`Failed to fetch stake units: ${unitsErr.message}`)
+    }
+    const unitMap = new Map<string, string>()
+    ;(rawUnits || []).forEach((u: any) => unitMap.set(u.id, u.unit_name))
+
+    // 5. Fetch visitors for the sessions
+    const { data: rawVisitors, error: visitorsErr } = await supabase
+      .from('session_visitors')
+      .select('id, session_id, full_name, contact_phone, is_church_member, inviting_unit_id, selected_class, created_at')
+      .in('session_id', sessionIds)
+
+    if (visitorsErr) {
+      throw new Error(`Failed to fetch session visitors: ${visitorsErr.message}`)
+    }
+
+    // Map unified attendance records
+    const attendanceRecords: AttendanceRecord[] = allRawAttendance.map((a: any) => {
+      const member = a.member_id ? memberMap.get(a.member_id) : null
+      const unitId = a.recorded_unit_id || member?.home_unit_id || ''
+      const unitName = unitMap.get(unitId) || (unitId ? 'Unit' : '')
+      const attendeeName = member?.full_name || 'Member'
+
+      return {
         id: a.id,
         sessionId: a.session_id,
         memberId: a.member_id,
-        attendeeName: a.members?.full_name || 'Member',
-        unitId: a.recorded_unit_id || a.members?.home_unit_id,
-        unitName: a.members?.stake_units?.unit_name,
+        attendeeName,
+        unitId,
+        unitName,
         selectedClass: a.selected_class,
         checkInTime: a.check_in_time,
         isNonMember: false
-      }))
+      }
+    })
 
-      const sessionVisitors: SessionVisitor[] = (visitorsRes.data || []).map((v: any) => ({
-        id: v.id,
-        sessionId: v.session_id,
-        fullName: v.full_name,
-        contactPhone: v.contact_phone,
-        isChurchMember: v.is_church_member,
-        invitingUnitId: v.inviting_unit_id,
-        invitingUnitName: v.stake_units?.unit_name,
-        selectedClass: v.selected_class,
-        createdAt: v.created_at
-      }))
+    const sessionVisitors: SessionVisitor[] = (rawVisitors || []).map((v: any) => ({
+      id: v.id,
+      sessionId: v.session_id,
+      fullName: v.full_name,
+      contactPhone: v.contact_phone,
+      isChurchMember: v.is_church_member,
+      invitingUnitId: v.inviting_unit_id,
+      invitingUnitName: v.inviting_unit_id ? unitMap.get(v.inviting_unit_id) || 'Visitor' : 'Visitor',
+      selectedClass: v.selected_class,
+      createdAt: v.created_at
+    }))
 
-      return { sessions, attendanceRecords, sessionVisitors }
-    } catch {
-      return { sessions: [], attendanceRecords: [], sessionVisitors: [] }
-    }
+    return { sessions, attendanceRecords, sessionVisitors }
   },
 
   /**
@@ -557,12 +736,15 @@ export const gatheringPlaceReportService = {
       })
 
       if (error) {
-        console.warn('RPC create report returned error, falling back to local snapshot:', error.message)
+        throw new Error(`Failed to persist report to database: ${error.message}`)
       } else if (data) {
         report.id = data
       }
-    } catch {
-      // In-memory or network mock fallback
+    } catch (err: any) {
+      if (err instanceof Error) {
+        throw err
+      }
+      throw new Error('Failed to create report due to unexpected network or database error.')
     }
 
     return report
@@ -597,12 +779,15 @@ export const gatheringPlaceReportService = {
       })
 
       if (error) {
-        console.warn('RPC review report returned error:', error.message)
+        throw new Error(`Failed to review report: ${error.message}`)
       } else if (data) {
         return data as any
       }
-    } catch {
-      // Fallback
+    } catch (err: any) {
+      if (err instanceof Error) {
+        throw err
+      }
+      throw new Error('Failed to execute review action due to unexpected database error.')
     }
 
     const nextStatus = action === 'approve' ? 'approved' : action === 'disapprove' ? 'disapproved' : 'correction_requested'

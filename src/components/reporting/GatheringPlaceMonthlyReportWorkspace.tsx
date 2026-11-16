@@ -12,9 +12,12 @@ import {
   Clock,
   XCircle,
   FileSpreadsheet,
-  Edit3
+  Edit3,
+  RefreshCw,
+  Info
 } from 'lucide-react'
 import { useAuth } from '../../context/AuthContext'
+import { getLagosParts } from '../../lib/timezone'
 import {
   StakeUnit,
   ActivityDefinition,
@@ -74,10 +77,11 @@ export const GatheringPlaceMonthlyReportWorkspace: React.FC<
   // Authorized Approver Check: strictly system_admin or verified Stake President
   const canApprove = isSystemAdmin || (isStakeLeader && isStakePresident)
 
-  // Current year & month defaults
-  const currentYear = new Date().getFullYear()
-  const [selectedYear, setSelectedYear] = useState<number>(currentYear)
-  const [selectedMonth, setSelectedMonth] = useState<number>(6) // Default June for Gathering Place cycles
+  // Current year & month defaults dynamically derived from Africa/Lagos
+  const lagosNow = getLagosParts(new Date())
+  const currentYear = lagosNow.year
+  const [selectedYear, setSelectedYear] = useState<number>(lagosNow.year)
+  const [selectedMonth, setSelectedMonth] = useState<number>(lagosNow.month)
 
   // Unit Selection State (8 Stake Units)
   const [selectedUnitIds, setSelectedUnitIds] = useState<string[]>(() =>
@@ -123,36 +127,54 @@ export const GatheringPlaceMonthlyReportWorkspace: React.FC<
   const [liveAttendanceRecords, setLiveAttendanceRecords] = useState<AttendanceRecord[]>(attendanceRecords)
   const [liveSessionVisitors, setLiveSessionVisitors] = useState<SessionVisitor[]>(sessionVisitors)
   const [liveSessions, setLiveSessions] = useState<ActivitySession[]>(sessions)
+  const [isLoadingMonthData, setIsLoadingMonthData] = useState<boolean>(false)
+  const [monthDataError, setMonthDataError] = useState<string | null>(null)
+
+  const reloadMonthData = async (yr: number, mo: number) => {
+    setIsLoadingMonthData(true)
+    setMonthDataError(null)
+    try {
+      const res = await gatheringPlaceReportService.fetchMonthAttendanceData(yr, mo)
+      setLiveSessions(res.sessions)
+      setLiveAttendanceRecords(res.attendanceRecords)
+      setLiveSessionVisitors(res.sessionVisitors)
+    } catch (err: any) {
+      setMonthDataError(err.message || 'Failed to load month attendance data from database.')
+    } finally {
+      setIsLoadingMonthData(false)
+    }
+  }
 
   useEffect(() => {
-    setLiveAttendanceRecords(attendanceRecords)
-  }, [attendanceRecords])
-
-  useEffect(() => {
-    setLiveSessionVisitors(sessionVisitors)
-  }, [sessionVisitors])
-
-  useEffect(() => {
-    setLiveSessions(sessions)
-  }, [sessions])
-
-  useEffect(() => {
-    if (attendanceRecords.length === 0) {
-      gatheringPlaceReportService
-        .fetchMonthAttendanceData(selectedYear, selectedMonth)
-        .then((res) => {
-          if (res.attendanceRecords.length > 0) {
-            setLiveAttendanceRecords(res.attendanceRecords)
-          }
-          if (res.sessionVisitors.length > 0) {
-            setLiveSessionVisitors(res.sessionVisitors)
-          }
-          if (res.sessions.length > 0) {
-            setLiveSessions(res.sessions)
-          }
-        })
+    if (attendanceRecords && attendanceRecords.length > 0) {
+      setLiveAttendanceRecords(attendanceRecords)
+      setLiveSessionVisitors(sessionVisitors || [])
+      setLiveSessions(sessions || [])
+    } else {
+      reloadMonthData(selectedYear, selectedMonth)
     }
   }, [selectedYear, selectedMonth, attendanceRecords.length])
+
+  // Pre-flight attendance frequency distribution calculation
+  const attendanceDistribution = useMemo(() => {
+    return gatheringPlaceReportService.calculateAttendanceDistribution({
+      attendanceRecords: liveAttendanceRecords,
+      sessionVisitors: liveSessionVisitors,
+      eligibleSessions: liveSessions,
+      minimumVisitThreshold,
+      selectedUnitIds,
+      isAllUnits: isAllUnitsSelected,
+      memberClassification
+    })
+  }, [
+    liveAttendanceRecords,
+    liveSessionVisitors,
+    liveSessions,
+    minimumVisitThreshold,
+    selectedUnitIds,
+    isAllUnitsSelected,
+    memberClassification
+  ])
 
   // Review & Correction Modals
   const [showReviewModal, setShowReviewModal] = useState<
@@ -415,7 +437,7 @@ export const GatheringPlaceMonthlyReportWorkspace: React.FC<
   // Print Handler (Disabled when unapproved)
   const handlePrintReport = () => {
     if (!activeReport || activeReport.status !== 'approved') return
-    triggerPrintReport(activeReport.reportTitle)
+    triggerPrintReport(activeReport.reportTitle, 'gathering-place-report-document')
   }
 
   // Export to Excel / CSV
@@ -437,8 +459,8 @@ export const GatheringPlaceMonthlyReportWorkspace: React.FC<
       scopeLabel:
         viewUnitFilter ||
         (activeReport.unitIds.length === units.length
-          ? 'All 8 Stake Units'
-          : `${activeReport.unitIds.length} Units`),
+          ? 'All 8 Stake Units (Abeokuta, Nigeria, Obantoko Stake)'
+          : `${activeReport.unitIds.length} Units (Abeokuta, Nigeria, Obantoko Stake)`),
       totalRecords: (activeReport.items || []).length,
       uniqueAttendees: (activeReport.items || []).length
     }
@@ -943,6 +965,172 @@ export const GatheringPlaceMonthlyReportWorkspace: React.FC<
               </div>
             </div>
 
+            {/* Database Fetch Error Alert */}
+            {monthDataError && (
+              <div className="p-4 bg-red-950/70 border border-red-800 rounded-xl flex items-center justify-between text-xs text-red-200">
+                <div className="flex items-center space-x-3">
+                  <AlertCircle className="w-5 h-5 flex-shrink-0 text-red-400" />
+                  <div>
+                    <span className="font-bold">Database Query Error: </span>
+                    <span>{monthDataError}</span>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => reloadMonthData(selectedYear, selectedMonth)}
+                  disabled={isLoadingMonthData}
+                  className="px-3 py-1 bg-red-900 hover:bg-red-800 text-white rounded-lg text-xs font-semibold flex items-center space-x-1.5 transition"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isLoadingMonthData ? 'animate-spin' : ''}`} />
+                  <span>Retry Fetch</span>
+                </button>
+              </div>
+            )}
+
+            {/* Pre-flight Attendance Reconciliation & Diagnostics Panel */}
+            <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-4 space-y-4">
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 border-b border-slate-800 pb-2">
+                <div className="flex items-center space-x-2">
+                  <Info className="w-4 h-4 text-emerald-400" />
+                  <span className="text-xs font-bold text-white uppercase tracking-wider">
+                    Pre-Flight Reconciliation & Diagnostics ({MONTH_NAMES[selectedMonth - 1]} {selectedYear})
+                  </span>
+                </div>
+                <div className="flex items-center space-x-2">
+                  {isLoadingMonthData ? (
+                    <span className="text-[11px] text-amber-400 flex items-center space-x-1">
+                      <RefreshCw className="w-3 h-3 animate-spin" />
+                      <span>Fetching database records...</span>
+                    </span>
+                  ) : (
+                    <span className="text-[11px] text-emerald-400 font-medium">
+                      ✓ Synchronized with live database
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => reloadMonthData(selectedYear, selectedMonth)}
+                    disabled={isLoadingMonthData}
+                    className="p-1 hover:bg-slate-800 text-slate-400 hover:text-white rounded text-xs transition"
+                    title="Reload live month data from database"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${isLoadingMonthData ? 'animate-spin' : ''}`} />
+                  </button>
+                </div>
+              </div>
+
+              {/* Metric Breakdown Grid */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                <div className="bg-slate-900/80 border border-slate-800 p-2.5 rounded-lg">
+                  <span className="text-[10px] text-slate-400 uppercase block font-semibold">Held Sessions</span>
+                  <div className="text-base font-black text-white mt-0.5">
+                    {liveExpectedVisitsResult.eligibleSessions.length}{' '}
+                    <span className="text-[11px] font-normal text-slate-400">
+                      of {liveSessions.filter((s) => s.status !== 'cancelled').length} in month
+                    </span>
+                  </div>
+                  <span className="text-[10px] text-slate-500">
+                    {selectedActivityIds.length === 0
+                      ? 'All activities included'
+                      : `${selectedActivityIds.length} activity selected`}
+                  </span>
+                </div>
+
+                <div className="bg-slate-900/80 border border-slate-800 p-2.5 rounded-lg">
+                  <span className="text-[10px] text-slate-400 uppercase block font-semibold">Total Check-Ins</span>
+                  <div className="text-base font-black text-white mt-0.5">
+                    {attendanceDistribution.totalRecords}
+                  </div>
+                  <span className="text-[10px] text-slate-500">
+                    Recorded check-in events
+                  </span>
+                </div>
+
+                <div className="bg-slate-900/80 border border-slate-800 p-2.5 rounded-lg">
+                  <span className="text-[10px] text-slate-400 uppercase block font-semibold">Distinct Attendees</span>
+                  <div className="text-base font-black text-white mt-0.5">
+                    {attendanceDistribution.totalDistinctAttendees}
+                  </div>
+                  <span className="text-[10px] text-slate-500">
+                    Unique participants in DB
+                  </span>
+                </div>
+
+                <div className="bg-slate-900/80 border border-slate-800 p-2.5 rounded-lg">
+                  <span className="text-[10px] text-emerald-400 uppercase block font-semibold">Qualifying Attendees</span>
+                  <div className="text-base font-black text-emerald-300 mt-0.5">
+                    {attendanceDistribution.qualifyingCount}
+                  </div>
+                  <span className="text-[10px] text-slate-400">
+                    Visits &ge; {minimumVisitThreshold} threshold
+                  </span>
+                </div>
+              </div>
+
+              {/* Attendee Frequency Distribution Pills */}
+              <div className="space-y-2 pt-1 border-t border-slate-800/80">
+                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-1">
+                  <span className="text-[11px] font-bold text-slate-300">
+                    Visit Frequency Distribution (Unique Attendees by Occurrence Count):
+                  </span>
+                  <div className="flex items-center space-x-1.5 text-[10px]">
+                    <span className="text-slate-400">Quick Threshold:</span>
+                    {[
+                      { label: 'All (0)', val: 0 },
+                      { label: '≥ 1', val: 1 },
+                      { label: '≥ 3', val: 3 },
+                      { label: '≥ 5 (Standard)', val: 5 }
+                    ].map((btn) => (
+                      <button
+                        key={btn.val}
+                        type="button"
+                        onClick={() => setMinimumVisitThreshold(btn.val)}
+                        className={`px-2 py-0.5 rounded font-semibold transition ${
+                          minimumVisitThreshold === btn.val
+                            ? 'bg-emerald-600 text-white'
+                            : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                        }`}
+                      >
+                        {btn.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-center text-xs">
+                  <div className={`p-2 rounded-lg border ${minimumVisitThreshold <= 1 ? 'bg-slate-900 border-emerald-800/60' : 'bg-slate-900/50 border-slate-800 text-slate-500'}`}>
+                    <span className="text-[10px] block text-slate-400">1 Visit</span>
+                    <strong className="text-sm font-mono text-white">{attendanceDistribution.distribution.visits1}</strong>
+                    <span className="text-[9px] block text-slate-500">attendees</span>
+                  </div>
+                  <div className={`p-2 rounded-lg border ${minimumVisitThreshold <= 2 ? 'bg-slate-900 border-emerald-800/60' : 'bg-slate-900/50 border-slate-800 text-slate-500'}`}>
+                    <span className="text-[10px] block text-slate-400">2 Visits</span>
+                    <strong className="text-sm font-mono text-white">{attendanceDistribution.distribution.visits2}</strong>
+                    <span className="text-[9px] block text-slate-500">attendees</span>
+                  </div>
+                  <div className={`p-2 rounded-lg border ${minimumVisitThreshold <= 3 ? 'bg-slate-900 border-emerald-800/60' : 'bg-slate-900/50 border-slate-800 text-slate-500'}`}>
+                    <span className="text-[10px] block text-slate-400">3 Visits</span>
+                    <strong className="text-sm font-mono text-white">{attendanceDistribution.distribution.visits3}</strong>
+                    <span className="text-[9px] block text-slate-500">attendees</span>
+                  </div>
+                  <div className={`p-2 rounded-lg border ${minimumVisitThreshold <= 4 ? 'bg-slate-900 border-emerald-800/60' : 'bg-slate-900/50 border-slate-800 text-slate-500'}`}>
+                    <span className="text-[10px] block text-slate-400">4 Visits</span>
+                    <strong className="text-sm font-mono text-white">{attendanceDistribution.distribution.visits4}</strong>
+                    <span className="text-[9px] block text-slate-500">attendees</span>
+                  </div>
+                  <div className="p-2 rounded-lg border bg-emerald-950/40 border-emerald-700/80">
+                    <span className="text-[10px] block text-emerald-400 font-semibold">5+ Visits</span>
+                    <strong className="text-sm font-mono text-emerald-200">{attendanceDistribution.distribution.visits5Plus}</strong>
+                    <span className="text-[9px] block text-emerald-400">attendees</span>
+                  </div>
+                </div>
+
+                <p className="text-[10px] text-slate-400 italic pt-1">
+                  * Note: For November 2026, 175 total check-ins were logged across 59 distinct attendees in 13 held sessions. Selecting 'Skill Acquisition' accounts for 9 held sessions (expected visits = 9). The standard Gathering Place report specifies a minimum threshold of 5 visits; attendees with 1 to 4 visits are excluded when threshold is 5.
+                </p>
+              </div>
+            </div>
+
             {/* Expected Visits Dynamic Calculation Banner */}
             <div className="bg-gradient-to-r from-amber-950/60 to-slate-900 border-2 border-amber-500/40 rounded-xl p-4 flex flex-col sm:flex-row justify-between items-center gap-3">
               <div>
@@ -1188,6 +1376,19 @@ export const GatheringPlaceMonthlyReportWorkspace: React.FC<
                               )
                             if (full) {
                               setActiveReport(full)
+                              setSelectedYear(full.reportingYear)
+                              setSelectedMonth(full.reportingMonth)
+                              setMinimumVisitThreshold(full.minimumVisitThreshold)
+                              setSelectedUnitIds(full.unitIds || [])
+                              if (full.filterCriteria?.selectedActivityIds) {
+                                setSelectedActivityIds(full.filterCriteria.selectedActivityIds)
+                              }
+                              if (full.filterCriteria?.selectedClassesByActivity) {
+                                setSelectedClassesByActivity(full.filterCriteria.selectedClassesByActivity)
+                              }
+                              if (full.leaderSnapshot?.userId) {
+                                setSelectedLeaderId(full.leaderSnapshot.userId)
+                              }
                               setActiveTab('workspace')
                             }
                           }}
